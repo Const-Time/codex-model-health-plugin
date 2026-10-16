@@ -25,12 +25,22 @@ export function installPreview() {
   document.body.style.background='var(--cp-color-bg-layout)'
   document.body.style.padding='24px'
   const runs: Run[] = params.get('scenario') === 'empty' ? [] : [example('0-1')]
+  const active = new Set<string>()
+  async function drive(run: Run) {
+    if (active.has(run.id)) return
+    active.add(run.id)
+    try {
+      while (run.status === 'ready') {
+        await window.codexProxyPlugin!.request({path:'api/runs/step',method:'POST',contentType:'application/json',body:JSON.stringify({id:run.id})})
+      }
+    } finally { active.delete(run.id) }
+  }
   window.codexProxyPlugin = {version:2,async request(input) {
     await new Promise(resolve => setTimeout(resolve,params.get('scenario') === 'loading' ? 12000 : 80))
     const data = input.body ? JSON.parse(input.body) : {}
     const respond=(value: unknown,status=200)=>({status,contentType:'application/json',body:new TextEncoder().encode(JSON.stringify(value)).buffer})
     if (params.get('scenario') === 'error') return respond({message:'模拟：宿主账号目录读取失败，请重试'},503)
-    if (input.path === 'api/bootstrap') return respond({catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[{id:'demo-k',name:'模型体检专用',enabled:true}]})
+    if (input.path === 'api/bootstrap') return respond({background_supported:true,catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[{id:'demo-k',name:'模型体检专用',enabled:true}]})
     if (input.path === 'api/upstreams/check') {
       const source = sources.find(s=>s.method===data.method)!
       const scenario = params.get('updates')
@@ -50,12 +60,12 @@ export function installPreview() {
       r.account_id = selectedAccount.id
       r.account_name = accountDisplayName(selectedAccount)
       Object.assign(r.plan,{method:data.method,engine_version:selected.engine_version,id:selected.id,hash:selected.hash,version:selected.version,tier:data.tier,claimed_model:data.claimed_model,request_model:data.request_model})
-      runs.unshift(r);return respond({run:r})
+      runs.unshift(r);void drive(r);return respond({run:r,background_running:true})
     }
     const r=runs.find(r=>r.id===data.id)
     if (!r) return respond({message:'模拟记录不存在'},404)
-    if (input.path === 'api/runs/get') return respond({run:r,busy:false})
-    if (input.path === 'api/runs/control') {r.status=data.action==='pause'?'paused':data.action==='stop'?'stopped':'ready';return respond({run:r})}
+    if (input.path === 'api/runs/get') return respond({run:r,busy:active.has(r.id),background_running:active.has(r.id)})
+    if (input.path === 'api/runs/control') {r.status=data.action==='pause'?'paused':data.action==='stop'?'stopped':'ready';if (data.action==='resume') void drive(r);return respond({run:r,background_running:active.has(r.id)})}
     if (input.path === 'api/runs/step') {
       const i=r.attempts.length
       await new Promise(resolve=>setTimeout(resolve,700))

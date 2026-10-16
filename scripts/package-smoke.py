@@ -189,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         identifier = context["call_id"]
         send({"type": "call", "id": identifier, "method": "management.handle", "context": context,
               "params": {"method": "GET" if body is None else "POST", "path": path, "query": "",
-                         "content_type": None if body is None else "application/json", "headers": []}},
+                         "content_type": None if body is None else "application/json", "headers": [{"name": "x-cpr-background-version", "value": [49]}]}},
              b"" if body is None else json.dumps(body).encode())
         while True:
             message, payload = receive()

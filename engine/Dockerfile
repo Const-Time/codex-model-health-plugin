@@ -1,5 +1,6 @@
 FROM python:3.12-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS build
-RUN apt-get update && apt-get install -y --no-install-recommends binutils && rm -rf /var/lib/apt/lists/*
+RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends binutils && rm -rf /var/lib/apt/lists/*
 COPY engine/requirements-build.txt /tmp/requirements-build.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-build.txt
 WORKDIR /src

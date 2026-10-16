@@ -1,10 +1,12 @@
 # 账号模型体检 · Codex Proxy 插件
 
-为 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 提供独立的账号模型体检页面：选择已有账号与计量 Key，通过原生代理和请求链路运行 **Meow / ModelTrace** 两种行为指纹检测，无需再次填写 API 地址或密钥，也不修改主项目。
+为 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 提供独立的账号模型体检页面：选择已有账号与计量 Key，通过原生代理和请求链路运行 **Meow / ModelTrace** 两种行为指纹检测，无需再次填写 API 地址或密钥；后台检测需要配套宿主支持。
 
-[下载 v0.2.2](https://github.com/R-lmmortal/codex-model-health-plugin/releases/tag/v0.2.2) · [反馈问题](https://github.com/R-lmmortal/codex-model-health-plugin/issues) · [插件使用规范](https://github.com/zyycn/codex-proxy-rs/blob/main/docs/plugins.md)
+[下载 v0.3.0](https://github.com/Const-Time/codex-model-health-plugin/releases/tag/v0.3.0) · [反馈问题](https://github.com/Const-Time/codex-model-health-plugin/issues) · [插件使用规范](https://github.com/zyycn/codex-proxy-rs/blob/main/docs/plugins.md)
 
 ![插件页面（模拟数据，不代表真实检测结果）](docs/screenshots/overview.png)
+
+本仓库由 Const-Time 维护，fork 自 [R-lmmortal/codex-model-health-plugin](https://github.com/R-lmmortal/codex-model-health-plugin)。保留上游及第三方版权、署名与许可。
 
 ## 来源与致谢
 
@@ -23,8 +25,8 @@
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 插件 ID / 版本 | `local.model-health` / `0.2.2` |
-| 宿主清单范围 | `>=3.19.0, <4.0.0`；实际使用验证为 3.19.0，其他版本需另验 |
+| 插件 ID / 版本 | `local.model-health` / `0.3.0` |
+| 宿主清单范围 | `>=3.12.4, <4.0.0`；**还必须支持后台续调 v1**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
 | 运行方式 | `trustedProcess`，插件以宿主系统身份运行，安装代表完整信任；不是操作系统沙箱 |
 | 扩展能力 | 独立管理页面；不注册请求中间件、调度器、观察器或自动维护任务 |
@@ -32,20 +34,20 @@
 在 **插件管理 → 安装插件 → GitHub** 中填写：
 
 ```text
-仓库：R-lmmortal/codex-model-health-plugin
-版本标签：v0.2.2（或留空查询最新稳定版）
+仓库：Const-Time/codex-model-health-plugin
+版本标签：v0.3.0（或留空查询最新稳定版）
 ```
 
-选择 `local.model-health-0.2.2-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/R-lmmortal/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
+选择 `local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
 
 Release 同时提供同名 `.tar.gz.sha256`；下载两个附件后可校验：
 
 ```sh
-sha256sum -c local.model-health-0.2.2-x86_64-unknown-linux-gnu.tar.gz.sha256
-# macOS：shasum -a 256 -c local.model-health-0.2.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS：shasum -a 256 -c local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
-保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。仓库与发布者主页为 [R-lmmortal](https://github.com/R-lmmortal)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
+保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。本 fork 维护者为 [Const-Time](https://github.com/Const-Time)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
 
 ## 使用
 
@@ -53,7 +55,7 @@ sha256sum -c local.model-health-0.2.2-x86_64-unknown-linux-gnu.tar.gz.sha256
 2. 打开「账号模型体检」，选择已启用的 OpenAI 账号和已有 Key 的名称。账号优先显示去除首尾空白后的邮箱；没有邮箱时显示账号名称。新建检测保存该显示名称，旧历史仍保留检测当时的名称；请求绑定始终使用账号 ID。
 3. 选择该 Key 可见的请求模型及检测方法。Meow 选择对照模型和 36 / 72 / 108 题档位；ModelTrace 使用统一候选库，固定 3 轮数字选择。切换方法保留账号、Key 和请求模型。
 4. 点击「开始检测」。宿主按所选 Key 计量；每次只执行一个请求。所选 Key 的分组/模型权限仍由主服务校验。
-5. 失败会暂停；点「继续检测」才会继续。每档最多追加 50% 重试预算。离开或隐藏页面后不再发送下一题；进行中的题目可能完成或中断，已计入的尝试不会清零。页面不承担无人值守后台任务。
+5. 失败会暂停；点「继续检测」才会继续。每档最多追加 50% 重试预算。离开菜单、隐藏页面或关闭浏览器后由宿主后台串行发送后续题目。宿主重启、插件停用或升级后不自动续发；重新打开并手动继续，未确认结果按一次未知尝试计入预算。
 6. 从历史打开报告或续测。仅在 16 个槽位满后替换最早的已结束记录，不覆盖未结束任务。
 
 Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告展示前 5 个候选模型及家族概率，完整 17 个候选的结果保存在任务报告中；满 3 个有效样本才给出「更接近」结论。概率是在冻结候选库内、均匀先验下的相对分布，库外模型也会归到已有候选，不代表真实身份概率。
@@ -78,7 +80,7 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 - ModelTrace 的原始 `fingerprint.py` 和统一候选库固定在上游提交 `d4131b30243dfa05e70180b5eedde742103f1d73`，来源及逐文件哈希见 `vendor/modeltrace/SOURCE.json`。复用原始随机题目生成、数字解析、Hellinger / 有序数字块融合、温度校准和家族聚合，不引入原项目的网络服务或 API Key 表单。
 - ModelTrace 生成 3 份独立题目后持久化，断点续测与失败重试保留题目和检测方法。通过现有 Responses 流发送单条用户消息，采样使用供应商默认值，不套用 Meow 的 256-token 短答参数。沿用插件单题 90 秒上限、串行执行、人工续测和 50% 重试预算（3 个有效样本、最多 5 次尝试），而非原网页的自动重试流程。
 - `ready → running → ready/paused/completed`；显式停止转 `stopped`。发送前先写 pending，异常中断后按一次未知结果计入预算。首轮所有题优先于重试；成功样本不重复计数。
-- 全局推理并发为 1；网络等待时释放状态锁。页面暂停/结束保留当前题的结果。每题发送前及续测时核对账号 ID、平台、启用状态和冻结的上游身份；Cookie 回写、令牌刷新导致的凭据版本变化不视作换号，认证类型或上游身份变化则中止续测。
+- 全局推理并发为 1；网络等待时释放状态锁。用户暂停/结束保留当前题的结果；页面只轮询状态，不发送检测题目。每题发送前及续测时核对账号 ID、平台、启用状态和冻结的上游身份；Cookie 回写、令牌刷新导致的凭据版本变化不视作换号，认证类型或上游身份变化则中止续测。
 - 缺少稳定上游身份的账号，在已有样本且凭据更新时要求新建检测。旧检测没有身份快照时，只有尚无样本或凭据版本未变才会补存当前身份；其他旧检测保留历史，结束后新建一次即可使用稳定身份校验。
 - 状态只写插件私有 `runs` 命名空间，16 槽位，CAS 更新；不改主服务数据库结构、不安装观察器/中间件/维护钩子。
 - 样本保留请求 ID、用量、错误与最多 256 字节回答摘录。Meow 保存归一化类别；ModelTrace 保存完整有序数字（最多 4096 个，超出则明确报错），用原评分器的有效长度判定剔除短答。评分不使用展示摘录，展示截短会标明。
@@ -121,3 +123,13 @@ pnpm --dir frontend build
 沿用 @codex-proxy/ui 与当前管理桥；保持 Meow / ModelTrace 原源码不变、方法与基线冻结、旧 Meow 记录兼容、账号/Key 显式绑定、预算保守计数、错误不参与评分。
 只改所请求的功能；补充离线协议测试和真实浏览器交互检查；不要自动部署或执行付费检测。
 ```
+
+## 本 fork 的后台协议与 Actions
+
+后台调度的授权与生命周期属于宿主，详见 [后台续调协议](docs/background.md)。插件不保存 Key 明文、不在失效 HostClient 上创建游离任务。管理调用已接收的任务不会因浏览器关闭而取消；每题使用新回调作用域，错误停止，不自动重发。继续检测仍会实际计费。
+
+`.github/workflows/build.yml` 对 main/codex 分支、PR 和手动触发执行版本一致性检查、Rust fmt/clippy、前端测试、Docker 构建、完整离线协议测试及受限容器安装包验收。制品保留 14 天。`.github/workflows/release.yml` 仅在本 fork 推送匹配版本的 `v*` 标签时发布同一批已测试制品，不重新构建。发布权限仅限 release job；PR 不使用写入凭据，不部署 VPS，也不调用真实模型。
+
+发布前同步 plugin.json、backend/Cargo.toml 与 Cargo.lock、frontend/package.json、docs/release-notes.md；提交推送后再创建带注释标签。开启 fork 的 Actions 后，推送提交触发检查；本地改动并不会自动启用或执行远端流水线。
+
+Actions 使用固定 SHA 的 [GitHub 官方 checkout](https://github.com/actions/checkout) 与 [artifact actions](https://github.com/actions/upload-artifact)，使用仓库 GITHUB_TOKEN 发布，不需要个人 PAT。

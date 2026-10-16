@@ -19,6 +19,9 @@ struct Peer {
     writer: WriteHalf<DuplexStream>,
     task: tokio::task::JoinHandle<()>,
     sequence: u64,
+    background_supported: bool,
+    background_active: Option<String>,
+    continuation: Option<Value>,
 }
 impl Drop for Peer {
     fn drop(&mut self) {
@@ -80,6 +83,9 @@ impl Peer {
             writer,
             task,
             sequence: 1,
+            background_supported: true,
+            background_active: None,
+            continuation: None,
         };
         let manifest = Manifest::from_author_slice(include_bytes!("../../plugin.json")).unwrap();
         peer.send(Frame::control(Message::Hello {
@@ -118,7 +124,7 @@ impl Peer {
     ) -> Result<Value, PluginFault> {
         let id = self.sequence;
         self.sequence += 2;
-        self.send(Frame{message:Message::Call{id,method:"management.handle".into(),context:CallContext{call_id:id,instance_id:"test".into(),generation:1,incarnation:"test".into(),stage:Stage::Management,timeout_ms:120000,resource_stream:false,resource_scope_id:"scope".into(),request_id:None,attempt_id:None,account_id:None,credential_revision:None},params:json!({"method":if input.is_some(){"POST"}else{"GET"},"path":path,"query":"","content_type":input.as_ref().map(|_|"application/json"),"headers":[]})},payload:input.map(|v|serde_json::to_vec(&v).unwrap()).unwrap_or_default()}).await;
+        self.send(Frame{message:Message::Call{id,method:"management.handle".into(),context:CallContext{call_id:id,instance_id:"test".into(),generation:1,incarnation:"test".into(),stage:Stage::Management,timeout_ms:120000,resource_stream:false,resource_scope_id:"scope".into(),request_id:None,attempt_id:None,account_id:None,credential_revision:None},params:json!({"method":if input.is_some(){"POST"}else{"GET"},"path":path,"query":"","content_type":input.as_ref().map(|_|"application/json"),"headers":if self.background_supported { let mut headers=vec![json!({"name":"x-cpr-background-version","value":[49]})]; if let Some(active)=&self.background_active {headers.push(json!({"name":"x-cpr-background-active","value":active.as_bytes()}));} headers } else {vec![]}})},payload:input.map(|v|serde_json::to_vec(&v).unwrap()).unwrap_or_default()}).await;
         loop {
             let frame = self.receive().await;
             match frame.message {
@@ -141,12 +147,20 @@ impl Peer {
                 Message::Result { id: rid, result } => {
                     assert_eq!(id, rid);
                     assert_eq!(result["content_type"], "application/json");
+                    self.continuation = result["headers"].as_array().unwrap().first().map(|h| {
+                        assert_eq!(h["name"], "x-cpr-background-next");
+                        serde_json::from_slice(
+                            &serde_json::from_value::<Vec<u8>>(h["value"].clone()).unwrap(),
+                        )
+                        .unwrap()
+                    });
                     let body: Value = serde_json::from_slice(&frame.payload).unwrap();
                     let status = result["status"].as_u64().unwrap();
                     if status >= 400 {
                         let mut error: PluginFault =
                             serde_json::from_value(body["error"].clone()).unwrap();
                         error.http_status = Some(status as u16);
+                        eprintln!("fixture request {path}: {}", error.message);
                         return Err(error);
                     }
                     assert_eq!(status, 200);
@@ -1119,4 +1133,69 @@ async fn metadata_and_token_refresh_do_not_change_account_identity() {
     assert_eq!(result["run"]["account_identity"], run["account_identity"]);
     assert_eq!(result["run"]["attempts"].as_array().unwrap().len(), 2);
     assert_eq!(host.executions.len(), 2);
+}
+
+#[tokio::test]
+async fn background_continuation_is_explicit_bounded_and_stops_on_failure() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let run = peer.start(&mut host).await;
+    let next = peer.continuation.clone().unwrap();
+    assert_eq!(next["id"], run["id"]);
+    assert_eq!(next["path"], "api/runs/step");
+    assert!(host.executions.is_empty());
+    peer.background_active = Some(run["id"].as_str().unwrap().into());
+    let state = host.state.clone();
+    let error = peer
+        .api(
+            "api/runs/control",
+            Some(json!({"id":run["id"],"action":"resume"})),
+            &mut host,
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.http_status, Some(409));
+    assert_eq!(host.state, state);
+    let current = peer
+        .api("api/runs/get", Some(json!({"id":run["id"]})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(current["background_running"], true);
+    let result = peer
+        .api(
+            "api/runs/step",
+            Some(serde_json::from_str(next["body"].as_str().unwrap()).unwrap()),
+            &mut host,
+        )
+        .await
+        .unwrap();
+    assert_eq!(peer.continuation.as_ref(), Some(&next));
+    assert_eq!(result["run"]["attempts"].as_array().unwrap().len(), 1);
+    peer.api(
+        "api/runs/control",
+        Some(json!({"id":run["id"],"action":"pause"})),
+        &mut host,
+    )
+    .await
+    .unwrap();
+    assert!(peer.continuation.is_none());
+    assert!(
+        peer.api("api/runs/step", Some(json!({"id":run["id"]})), &mut host)
+            .await
+            .is_err()
+    );
+    assert_eq!(host.executions.len(), 1);
+}
+
+#[tokio::test]
+async fn unsupported_host_rejects_before_any_state_or_model_calls() {
+    let mut peer = Peer::new().await;
+    peer.background_supported = false;
+    let mut host = Host::default();
+    let error = peer.api("api/runs/start", Some(json!({"account_id":"account-b","key_id":"key-b","request_model":"gpt-6-astra","claimed_model":"gpt-6-astra","tier":"low"})), &mut host).await.err().unwrap();
+    assert_eq!(error.http_status, Some(409));
+    assert!(host.state.is_empty());
+    assert!(host.executions.is_empty());
+    assert!(peer.continuation.is_none());
 }

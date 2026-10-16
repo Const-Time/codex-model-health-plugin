@@ -18,13 +18,15 @@ const catalog = computed(() => bootstrap.value?.catalog.methods.find(c => c.meth
 const methodOptions = computed(() => bootstrap.value?.catalog.methods.map(c => ({value:c.method,label:c.label})) ?? [])
 watch(method, value => { tier.value = value === 'modeltrace' ? 'fixed' : 'low'; claimed.value = value === 'modeltrace' ? 'unified' : '' })
 const reportView = ref('fingerprint')
-let keepRunning = false, disposed = false, modelSequence = 0
+let disposed = false, modelSequence = 0
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let polling = false, runSequence = 0, lastHistoryRefresh = 0
 const tierOptions = computed(() => catalog.value?.tiers.map(t => ({value:t.id,label:`${({low:'快速',medium:'标准',high:'完整'} as Record<string,string>)[t.id]} · ${t.count} 题`})) ?? [])
 const count = computed(() => catalog.value?.tiers.find(t => t.id === tier.value)?.count ?? 0)
 const finished = computed(() => run.value?.status === 'completed' || run.value?.status === 'stopped')
 const valid = computed(() => run.value?.attempts.filter(a => a.status === 'ok').length ?? 0)
 const failures = computed(() => run.value?.attempts.filter(a => a.status === 'error').length ?? 0)
-const canStart = computed(() => account.value && key.value && model.value && claimed.value && !loading.value && !modelsLoading.value && !action.value && !pumping.value && !error.value)
+const canStart = computed(() => account.value && key.value && model.value && claimed.value && !loading.value && !modelsLoading.value && !action.value && !pumping.value && !error.value && bootstrap.value?.background_supported === true)
 const lastError = computed(() => [...(run.value?.attempts ?? [])].reverse().find(a => a.status === 'error')?.error)
 const traceReport = computed(() => run.value?.report.method === 'modeltrace' ? run.value.report : null)
 const candidates = computed<[string, number][]>(() => {
@@ -36,7 +38,7 @@ const attemptColumns = [{key:'number',label:'#',kind:'index'},{key:'job_id',labe
 const accountOptions = computed(() => bootstrap.value?.accounts.map(a => ({value:a.id,label:accountDisplayName(a)})) ?? [])
 
 function message(cause: unknown) { return cause instanceof Error ? cause.message : String(cause) }
-async function loadHistory() { history.value = (await api<{runs: History[]}>('runs')).runs }
+async function loadHistory() { history.value = (await api<{runs: History[]}>('runs')).runs; lastHistoryRefresh = Date.now() }
 async function load() {
   loading.value = true; error.value = ''
   try { bootstrap.value = await api<Bootstrap>('bootstrap'); await loadHistory(); if (key.value) await loadModels(key.value) }
@@ -55,42 +57,43 @@ async function loadModels(value: string) {
 watch(key, value => { void loadModels(value) })
 async function operate(fn: () => Promise<void>) {
   if (action.value) return
-  action.value = true; error.value = ''
-  try { await fn() } catch (cause) { error.value = message(cause); keepRunning = false }
+  action.value = true; runSequence++; error.value = ''
+  try { await fn() } catch (cause) { error.value = message(cause) }
   finally { action.value = false }
 }
-async function pump() {
-  if (pumping.value || !run.value) return
-  const id = run.value.id
-  keepRunning = true; pumping.value = true
+async function refreshRun(id: string) {
+  const sequence = runSequence
+  const result = await api<{run: Run; background_running: boolean}>('runs/get', {id})
+  if (!disposed && !action.value && sequence === runSequence && run.value?.id === id) { run.value = result.run; pumping.value = result.background_running }
+}
+async function poll() {
+  if (disposed || polling) return
+  polling = true
   try {
-    while (keepRunning && !disposed && document.visibilityState === 'visible' && run.value?.id === id && run.value.status === 'ready') {
-      run.value = (await api<{run: Run}>('runs/step', {id})).run
+    if (document.visibilityState === 'visible' && !action.value && !loading.value) {
+      const refreshHistory = Date.now() - lastHistoryRefresh >= 15000
+      if (run.value && (pumping.value || refreshHistory)) await refreshRun(run.value.id)
+      if (refreshHistory) await loadHistory()
     }
-    if (!disposed) await loadHistory()
-  } catch (cause) { error.value = `${message(cause)}；请刷新任务状态后再续测，避免重复请求` }
-  finally { pumping.value = false; keepRunning = false }
+  } catch (cause) { if (!disposed) error.value = `状态刷新失败：${message(cause)}；后台任务不会因此重发` }
+  finally { polling = false; if (!disposed) pollTimer = setTimeout(() => { void poll() }, 3000) }
 }
 async function start() {
   starting.value = true
   await operate(async () => {
-    run.value = (await api<{run: Run}>('runs/start', {method:method.value,account_id:account.value,key_id:key.value,request_model:model.value,claimed_model:claimed.value,tier:tier.value})).run
+    const result = await api<{run: Run; background_running: boolean}>('runs/start', {method:method.value,account_id:account.value,key_id:key.value,request_model:model.value,claimed_model:claimed.value,tier:tier.value}); run.value = result.run; pumping.value = result.background_running
     reportView.value = 'fingerprint'
     await loadHistory()
   })
   starting.value = false
-  if (!error.value) void pump()
 }
 async function control(command: string) {
   if (!run.value) return
-  keepRunning = false
-  await operate(async () => { run.value = (await api<{run: Run}>('runs/control', {id:run.value!.id,action:command})).run; await loadHistory() })
-  if (command === 'resume' && !error.value) void pump()
+  await operate(async () => { const result = await api<{run: Run; background_running: boolean}>('runs/control', {id:run.value!.id,action:command}); run.value = result.run; pumping.value = result.background_running; await loadHistory() })
 }
-async function openRun(id: string) { await operate(async () => { run.value = (await api<{run: Run}>('runs/get',{id})).run }) }
-function visibility() { if (document.visibilityState !== 'visible') keepRunning = false }
-onMounted(() => { void load(); document.addEventListener('visibilitychange',visibility) })
-onScopeDispose(() => { disposed=true;keepRunning=false;document.removeEventListener('visibilitychange',visibility) })
+async function openRun(id: string) { await operate(async () => { const result = await api<{run: Run; background_running: boolean}>('runs/get',{id}); run.value = result.run; pumping.value = result.background_running }) }
+onMounted(() => { void load().then(() => poll()) })
+onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
 </script>
 
 <template>
@@ -101,6 +104,7 @@ onScopeDispose(() => { disposed=true;keepRunning=false;document.removeEventListe
       <BaseIconButton label="刷新账号和历史" :disabled="loading || pumping" @click="load"><RefreshCw class="size-4" /></BaseIconButton>
     </div>
     <div v-if="error" class="error-panel" role="alert"><strong>操作未完成</strong><p>{{ error }}</p><BaseButton size="sm" @click="error=''; run ? openRun(run.id) : load()">重新读取状态</BaseButton></div>
+    <p v-if="bootstrap && !bootstrap.background_supported" class="error-panel" role="alert">此宿主不支持后台检测 v1，请先升级配套宿主。未发送任何检测请求。</p>
     <div class="setup-grid">
       <BaseCard>
         <template #header><div class="flex items-center gap-3"><span class="section-icon"><FlaskConical class="size-5" /></span><div><h2>新建检测</h2><p class="subtitle">使用已有账号，无需填写 API 地址或密钥</p></div></div></template>
@@ -122,19 +126,19 @@ onScopeDispose(() => { disposed=true;keepRunning=false;document.removeEventListe
       <BaseCard>
         <template #header><div class="flex items-center gap-2"><Fingerprint class="size-5 text-cp-text-secondary" /><h2>如何理解结果</h2></div></template>
         <template #body>
-          <div class="explanation"><p>这里比较的是<span class="text-cp-text font-emphasis">模型行为指纹</span>，不是智商分数，也不是模型身份认证</p><ul><li><Check class="size-4" /><span>锁定所选账号，由主服务使用其原有代理和凭据发送</span></li><li><Check class="size-4" /><span>错误、拒答和截断不算模型答错，失败后自动暂停</span></li><li><Check class="size-4" /><span>切走页面后不再发下一题，重新打开可手动续测</span></li></ul><div class="baseline-meta"><span>检测引擎</span><strong>{{ methodText(method) }} {{ catalog?.engine_version ?? '—' }}</strong><span>基线版本</span><strong>{{ catalog?.version ?? '—' }}</strong></div><p v-if="method === 'modeltrace'" class="text-cp-xs mb-0">概率只在候选库内比较，库外模型也会归到最接近的候选，不代表真实身份概率</p><p v-else class="text-cp-xs mb-0">Meow 使用 GPT 行为基线，检测不会自动调整账号、路由或额度</p></div>
+          <div class="explanation"><p>这里比较的是<span class="text-cp-text font-emphasis">模型行为指纹</span>，不是智商分数，也不是模型身份认证</p><ul><li><Check class="size-4" /><span>锁定所选账号，由主服务使用其原有代理和凭据发送</span></li><li><Check class="size-4" /><span>错误、拒答和截断不算模型答错，失败后自动暂停</span></li><li><Check class="size-4" /><span>切换菜单或关闭浏览器后仍由宿主持续检测；失败暂停，手动继续</span></li></ul><div class="baseline-meta"><span>检测引擎</span><strong>{{ methodText(method) }} {{ catalog?.engine_version ?? '—' }}</strong><span>基线版本</span><strong>{{ catalog?.version ?? '—' }}</strong></div><p v-if="method === 'modeltrace'" class="text-cp-xs mb-0">概率只在候选库内比较，库外模型也会归到最接近的候选，不代表真实身份概率</p><p v-else class="text-cp-xs mb-0">Meow 使用 GPT 行为基线，检测不会自动调整账号、路由或额度</p></div>
           <SourceUpdates v-if="bootstrap" :sources="bootstrap.sources" />
         </template>
       </BaseCard>
     </div>
 
     <BaseCard v-if="run">
-      <template #header><div class="flex flex-wrap items-center justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><h2>{{ run.account_name }}</h2><BaseTag :type="tone(run.report,run.status)">{{ statusText[run.status] }}</BaseTag><BaseTag>{{ methodText(run.plan.method) }}</BaseTag></div><p class="subtitle">{{ run.plan.request_model }} <span class="mx-1">→</span> {{ run.plan.method === 'modeltrace' ? '统一候选库' : run.plan.claimed_model }} · {{ tierText[run.plan.tier] }}</p></div><div class="flex flex-wrap gap-2"><BaseIconButton label="刷新当前任务" :disabled="action || pumping" @click="openRun(run.id)"><RefreshCw class="size-4" /></BaseIconButton><template v-if="!finished"><BaseButton v-if="pumping" size="sm" :disabled="action" @click="control('pause')"><Pause class="size-4" />当前题完成后暂停</BaseButton><BaseButton v-else size="sm" variant="primary" :disabled="action" @click="control('resume')"><Play class="size-4" />继续检测</BaseButton><BaseButton size="sm" :disabled="action" @click="control('stop')"><Square class="size-3" />结束检测</BaseButton></template></div></div></template>
+      <template #header><div class="flex flex-wrap items-center justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><h2>{{ run.account_name }}</h2><BaseTag :type="tone(run.report,run.status)">{{ pumping && run.status === 'ready' ? '后台排队中' : statusText[run.status] }}</BaseTag><BaseTag>{{ methodText(run.plan.method) }}</BaseTag></div><p class="subtitle">{{ run.plan.request_model }} <span class="mx-1">→</span> {{ run.plan.method === 'modeltrace' ? '统一候选库' : run.plan.claimed_model }} · {{ tierText[run.plan.tier] }}</p></div><div class="flex flex-wrap gap-2"><BaseIconButton label="刷新当前任务" :disabled="action" @click="openRun(run.id)"><RefreshCw class="size-4" /></BaseIconButton><template v-if="!finished"><BaseButton v-if="pumping" size="sm" :disabled="action" @click="control('pause')"><Pause class="size-4" />当前题完成后暂停</BaseButton><BaseButton v-else size="sm" variant="primary" :disabled="action" @click="control('resume')"><Play class="size-4" />继续检测</BaseButton><BaseButton size="sm" :disabled="action" @click="control('stop')"><Square class="size-3" />结束检测</BaseButton></template></div></div></template>
       <template #body>
         <div class="progress-facts"><div><span>有效样本</span><strong>{{ valid }} <small>/ {{ run.plan.jobs.length }}</small></strong></div><div><span>尝试（含中断）</span><strong>{{ run.attempts.length }} <small>/ {{ run.plan.jobs.length + run.plan.retry_budget }}</small></strong></div><div><span>失败 / 中断</span><strong>{{ failures }}</strong></div><div><span>检测结论</span><strong class="verdict-text">{{ verdict(run.report,run.status) }}</strong></div></div>
         <progress class="sample-progress" :value="valid" :max="run.plan.jobs.length" aria-label="有效样本进度" />
-        <p v-if="pumping" role="status" class="muted text-cp-sm">当前题目正在请求中；结束或暂停会保留本题的用量与结果。</p>
-        <p v-else-if="!finished" class="muted text-cp-sm">检测未自动运行。点击“继续检测”后，页面会逐题发送请求。</p>
+        <p v-if="pumping" role="status" class="muted text-cp-sm">宿主后台检测中，可切换菜单或关闭浏览器；暂停/结束将保留当前题的用量与结果。</p>
+        <p v-else-if="!finished" class="muted text-cp-sm">后台检测已暂停或中断。点击“继续检测”后由宿主续测；未知结果会计入尝试预算。</p>
         <p v-if="lastError" class="sample-error" role="status">最近一次异常：{{ lastError }}</p>
         <div class="flex flex-wrap justify-between items-center gap-3 mt-5 mb-4"><BaseSegmented v-model="reportView" label="报告视图" :options="[{value:'fingerprint',label:'指纹报告'},{value:'samples',label:'请求明细'}]" /><span class="muted text-cp-xs">{{ formatTime(run.updated_at) }} 更新 · {{ run.key_name }}</span></div>
         <div v-if="reportView === 'fingerprint'" class="report-grid">
@@ -146,7 +150,7 @@ onScopeDispose(() => { disposed=true;keepRunning=false;document.removeEventListe
     </BaseCard>
     <BaseCard>
       <template #header><div class="flex flex-wrap justify-between gap-3"><div><h2>检测历史</h2><p class="subtitle">保留最近 16 条记录 · 报告沿用检测时的基线，不重新评分</p></div><BaseTag class="self-start">{{ history.length }} 条</BaseTag></div></template>
-      <template #body><BaseTable :columns="historyColumns" :rows="history" :loading="loading" empty-text="还没有检测记录。选择账号，开始第一次检测。"><template #result="{row}"><BaseTag :type="tone(row.report,row.status)">{{ row.status === 'completed' || row.status === 'stopped' ? verdict(row.report,row.status) : statusText[row.status] }}</BaseTag></template><template #actions="{row}"><BaseIconButton :label="`查看 ${row.account_name} 的检测报告`" :disabled="pumping || action" @click="openRun(row.id)"><ArrowRight class="size-4" /></BaseIconButton></template></BaseTable></template>
+      <template #body><BaseTable :columns="historyColumns" :rows="history" :loading="loading" empty-text="还没有检测记录。选择账号，开始第一次检测。"><template #result="{row}"><BaseTag :type="tone(row.report,row.status)">{{ row.status === 'completed' || row.status === 'stopped' ? verdict(row.report,row.status) : statusText[row.status] }}</BaseTag></template><template #actions="{row}"><BaseIconButton :label="`查看 ${row.account_name} 的检测报告`" :disabled="action" @click="openRun(row.id)"><ArrowRight class="size-4" /></BaseIconButton></template></BaseTable></template>
     </BaseCard>
   </main>
 </template>

@@ -1,0 +1,54 @@
+name: Check and package
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Toolchain
+        run: |
+          npm install --global pnpm@10.10.0
+          rustup toolchain install 1.97.0 --profile minimal --component rustfmt,clippy
+          rustup default 1.97.0
+      - name: Version and source checks
+        run: |
+          python3 scripts/check-release.py
+          cargo fmt --manifest-path backend/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path backend/Cargo.toml --all-targets -- -D warnings
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend test
+      - name: Install pinned packaging CLI
+        run: |
+          cargo install --git https://github.com/zyycn/codex-proxy-rs.git \
+            --rev fef52b3717019513108733549508377a309f129d \
+            --locked --root .tools/cpr-cli codex-proxy-plugin-cli
+      - name: Build and offline acceptance tests
+        env:
+          CPR_PLUGIN_BIN: ${{ github.workspace }}/.tools/cpr-cli/bin/cpr-plugin
+        run: bash scripts/build-linux.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: linux-x86_64-plugin
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+          retention-days: 14

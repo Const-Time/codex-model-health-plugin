@@ -124,8 +124,63 @@ pub async fn handle(
     service: &Service,
     call: TypedCall<ManagementRequest>,
 ) -> Result<TypedReply<ManagementResponse>, PluginFault> {
+    let path = call.request.path.clone();
+    let background = call
+        .request
+        .headers
+        .iter()
+        .any(|h| h.name == "x-cpr-background-version" && h.value == b"1");
+    let active = call
+        .request
+        .headers
+        .iter()
+        .find(|h| h.name == "x-cpr-background-active")
+        .and_then(|h| std::str::from_utf8(&h.value).ok())
+        .map(str::to_owned);
+    let resume = path == "api/runs/control"
+        && serde_json::from_slice::<Value>(&call.payload)
+            .ok()
+            .is_some_and(|v| v["action"] == "resume");
+    if path == "api/runs/start" || resume || path == "api/runs/step" {
+        if !background {
+            return reply_status(
+                409,
+                json!({"error": PluginFault::new(ErrorCode::Conflict, "宿主尚不支持后台检测，请先升级配套的 Codex Proxy 宿主")}),
+            );
+        }
+        if active.is_some() && (path == "api/runs/start" || resume) {
+            return reply_status(
+                409,
+                json!({"error": PluginFault::new(ErrorCode::Conflict, "已有后台检测正在执行，请先暂停或结束")}),
+            );
+        }
+    }
     match dispatch(service, call).await {
-        Ok(response) => Ok(response),
+        Ok(mut response) => {
+            let mut value: Value =
+                serde_json::from_slice(&response.payload).map_err(|_| invalid("响应格式错误"))?;
+            if path == "api/bootstrap" {
+                value["background_supported"] = json!(background);
+            }
+            let continues = (path == "api/runs/start" || resume || path == "api/runs/step")
+                && value["run"]["status"] == "ready";
+            if continues {
+                let id = value["run"]["id"]
+                    .as_str()
+                    .ok_or_else(|| invalid("任务标识缺失"))?;
+                response.result.headers.push(gateway_plugin_sdk::call::middleware::MiddlewareHeader {
+                    name: "x-cpr-background-next".into(),
+                    value: serde_json::to_vec(&json!({"id":id,"path":"api/runs/step","body":json!({"id":id}).to_string()})).map_err(|_| invalid("后台任务编码失败"))?,
+                });
+            }
+            if value.get("run").is_some() {
+                value["background_running"] = json!(
+                    continues || active.as_deref().is_some_and(|id| value["run"]["id"] == id)
+                );
+            }
+            response.payload = serde_json::to_vec(&value).map_err(|_| invalid("响应编码失败"))?;
+            Ok(response)
+        }
         Err(error) => {
             let status = match error.code {
                 ErrorCode::InvalidInput => 400,
