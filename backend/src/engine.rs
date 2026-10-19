@@ -78,13 +78,29 @@ impl Engine {
                 // PyInstaller onefile 也会解压动态库，不能再使用系统 /tmp。
                 command.env("TMPDIR", directory);
             }
-            let mut child = command
+            command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
-                .kill_on_drop(true)
-                .spawn()
-                .map_err(|e| fault(format!("检测引擎启动失败：{e}")))?;
+                .kill_on_drop(true);
+            // A concurrent fork can briefly inherit a just-closed executable's
+            // write descriptor before exec closes it. Retry only ETXTBSY before
+            // a child exists; never replay an exchange or an inference request.
+            let mut retries = 0;
+            let mut child = loop {
+                match command.spawn() {
+                    Ok(child) => break child,
+                    Err(error)
+                        if cfg!(target_os = "linux")
+                            && error.raw_os_error() == Some(26)
+                            && retries < 5 =>
+                    {
+                        retries += 1;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    Err(error) => return Err(fault(format!("检测引擎启动失败：{error}"))),
+                }
+            };
             let input = child
                 .stdin
                 .take()

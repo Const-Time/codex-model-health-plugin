@@ -1,4 +1,4 @@
-"""Exercise the packaged executable over SDK v2; public GitHub checks are opt-in."""
+"""Exercise the packaged executable over SDK v4; public GitHub checks are opt-in."""
 import hashlib
 import json
 import os
@@ -64,9 +64,24 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
                'exec /usr/bin/env -i ./bin/plugin']
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
 
+    def data_owner(message):
+        kind = message["type"]
+        if kind == "hello":
+            return message["handshake"], "configuration"
+        if kind in ("call", "callback"):
+            return message, "params"
+        if kind == "result":
+            return message, "result"
+        return None, None
+
     def send(message, payload=b""):
+        message = json.loads(json.dumps(message))
+        owner, key = data_owner(message)
+        data = b"" if owner is None else json.dumps(owner.pop(key), separators=(",", ":")).encode()
+        if data:
+            message["data_bytes"] = len(data)
         body = json.dumps(message, separators=(",", ":")).encode()
-        process.stdin.write(struct.pack(">IQ", len(body), len(payload)) + body + payload)
+        process.stdin.write(struct.pack(">IQ", len(body), len(data) + len(payload)) + body + data + payload)
         process.stdin.flush()
 
     def read_exact(length):
@@ -83,7 +98,17 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
     def receive():
         meta, payload = struct.unpack(">IQ", read_exact(12))
         assert 0 < meta <= 65536 and payload < 2 * 1024 * 1024
-        return json.loads(read_exact(meta)), read_exact(payload)
+        message = json.loads(read_exact(meta))
+        context_size = message.pop("request_context_bytes", 0)
+        data_size = message.pop("data_bytes", 0)
+        assert context_size + data_size <= payload
+        if context_size:
+            message["context"]["request"] = json.loads(read_exact(context_size))
+        owner, key = data_owner(message)
+        assert (owner is not None) == (data_size > 0)
+        if data_size:
+            owner[key] = json.loads(read_exact(data_size))
+        return message, read_exact(payload - context_size - data_size)
 
     host = {"executions": 0, "state": {}, "callbacks": [], "numeric": False, "http_body": None}
 
@@ -202,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             send({"type": "result", "id": message["id"], "result": result}, response)
 
     try:
-        send({"type": "hello", "handshake": {"protocol_version": 2, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
+        send({"type": "hello", "handshake": {"protocol_version": 4, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
         ready, _ = receive()
         assert ready["type"] == "ready"
         context = {"call_id": 1, "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "stage": "management", "timeout_ms": 120000, "resource_stream": False, "resource_scope_id": "smoke", "request_id": None, "attempt_id": None, "account_id": None, "credential_revision": None}
@@ -310,7 +335,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         send({"type": "shutdown"})
         process.wait(timeout=15)
         assert process.returncode == 0, process.stderr.read().decode()
-        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v2=PASS; engine=4.5.4; accounts=1; keys=1; error_http=400; real_model_calls=0")
+        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v4=PASS; engine=4.5.4; accounts=1; keys=1; error_http=400; real_model_calls=0")
     finally:
         if process.poll() is None:
             subprocess.run(["docker", "rm", "-f", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

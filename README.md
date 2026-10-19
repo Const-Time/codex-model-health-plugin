@@ -2,7 +2,7 @@
 
 为 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 提供独立的账号模型体检页面：选择已有账号与计量 Key，通过原生代理和请求链路运行 **Meow / ModelTrace** 两种行为指纹检测，无需再次填写 API 地址或密钥；后台检测需要配套宿主支持。
 
-[下载 v0.3.0](https://github.com/Const-Time/codex-model-health-plugin/releases/tag/v0.3.0) · [反馈问题](https://github.com/Const-Time/codex-model-health-plugin/issues) · [插件使用规范](https://github.com/zyycn/codex-proxy-rs/blob/main/docs/plugins.md)
+[查看发布包](https://github.com/Const-Time/codex-model-health-plugin/releases) · [反馈问题](https://github.com/Const-Time/codex-model-health-plugin/issues) · [插件使用规范](https://github.com/zyycn/codex-proxy-rs/blob/main/docs/plugins.md)
 
 ![插件页面（模拟数据，不代表真实检测结果）](docs/screenshots/overview.png)
 
@@ -25,8 +25,8 @@
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 插件 ID / 版本 | `local.model-health` / `0.3.0` |
-| 宿主清单范围 | `>=3.12.4, <4.0.0`；**还必须支持后台续调 v1**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
+| 插件 ID / 版本 | `local.model-health` / `0.4.0` |
+| 宿主清单范围 | `>=3.13.0, <4.0.0`；**还必须支持后台续调 v1**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
 | 运行方式 | `trustedProcess`，插件以宿主系统身份运行，安装代表完整信任；不是操作系统沙箱 |
 | 扩展能力 | 独立管理页面；不注册请求中间件、调度器、观察器或自动维护任务 |
@@ -35,16 +35,16 @@
 
 ```text
 仓库：Const-Time/codex-model-health-plugin
-版本标签：v0.3.0（或留空查询最新稳定版）
+版本标签：v0.4.0（或留空查询最新稳定版）
 ```
 
-选择 `local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
+选择 `local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
 
 Release 同时提供同名 `.tar.gz.sha256`；下载两个附件后可校验：
 
 ```sh
-sha256sum -c local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-# macOS：shasum -a 256 -c local.model-health-0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS：shasum -a 256 -c local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。本 fork 维护者为 [Const-Time](https://github.com/Const-Time)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
@@ -133,3 +133,7 @@ pnpm --dir frontend build
 发布前同步 plugin.json、backend/Cargo.toml 与 Cargo.lock、frontend/package.json、docs/release-notes.md；提交推送后再创建带注释标签。开启 fork 的 Actions 后，推送提交触发检查；本地改动并不会自动启用或执行远端流水线。
 
 Actions 使用固定 SHA 的 [GitHub 官方 checkout](https://github.com/actions/checkout) 与 [artifact actions](https://github.com/actions/upload-artifact)，使用仓库 GITHUB_TOKEN 发布，不需要个人 PAT。
+
+## RPC v4 升级
+
+v0.4.0 使用上游 `a0e70807` SDK / CLI 和 management v2，配套本地宿主 3.13.0。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；runs 状态 schema 仍为 1，历史和冻结计划继续读取。
