@@ -1,0 +1,111 @@
+import { createRequire } from 'node:module'
+import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
+const require = createRequire(import.meta.url)
+const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright')
+const root = fileURLToPath(new URL('../', import.meta.url))
+const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROME_BINARY })
+const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } })
+const errors = []
+page.on('pageerror', error => errors.push(error.message))
+const base = process.env.PREVIEW_URL || 'http://127.0.0.1:4175/'
+async function options(label) {
+  const trigger = page.getByRole('combobox', { name: label, exact: true })
+  await trigger.click()
+  return page.locator(`[id="${await trigger.getAttribute('aria-controls')}"]`)
+}
+async function select(label, value) { await (await options(label)).getByRole('option', { name: value, exact: true }).click() }
+async function persisted() {
+  return page.evaluate(async () => JSON.parse(new TextDecoder().decode((await window.codexProxyPlugin.request({ path: 'api/schedule', method: 'GET' })).body)))
+}
+async function save() {
+  await page.getByRole('button', { name: '保存计划', exact: true }).click()
+  await page.getByText('已保存。', { exact: false }).waitFor()
+}
+try {
+  await page.goto(`${base}?preview=1`)
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === '保存计划' && !b.disabled))
+  assert.equal(await page.getByText('请先在主项目启用 OpenAI 账号和测试 Key，然后刷新。', { exact: true }).count(), 0)
+  const list = await options('探测账号')
+  await page.getByRole('combobox', { name: '搜索选项', exact: true }).fill('primary')
+  assert.equal(await list.getByRole('option').count(), 1)
+  await list.getByRole('option', { name: 'primary@example.com', exact: true }).click()
+  await page.getByRole('combobox', { name: '搜索选项', exact: true }).fill('')
+  await list.getByRole('option', { name: 'backup@example.com', exact: true }).click()
+  await page.keyboard.press('Escape')
+  await page.getByRole('switch', { name: '启用定时任务' }).locator('..').click()
+  assert.equal(await page.getByRole('button', { name: '保存计划', exact: true }).isDisabled(), true)
+  await select('定时探测请求模型', 'gpt-6-astra')
+  await save()
+  assert.deepEqual((await persisted()).accounts.map(a => a.account_id), ['demo-a', 'demo-b'])
+  await page.getByRole('button', { name: '刷新状态', exact: true }).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === '保存计划' && !b.disabled))
+  await page.getByRole('button', { name: '移除 backup@example.com', exact: true }).last().waitFor()
+  assert.equal(await page.getByRole('switch', { name: '启用定时任务' }).isChecked(), true)
+  await page.screenshot({ path: `${root}/review/screenshots/schedule-multiselect-light.png`, fullPage: true })
+  await page.getByRole('radio', { name: '每天指定时间', exact: true }).click()
+  await page.getByLabel('每天执行时间', { exact: true }).fill('09:30')
+  await select('执行时区', 'Asia/Shanghai（北京时间）')
+  await save()
+  assert.deepEqual((await persisted()).timing, { mode: 'daily', daily_time: '09:30', cron: '0 9 * * *', timezone: 'Asia/Shanghai' })
+  await page.getByRole('button', { name: '刷新状态', exact: true }).click()
+  await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === '保存计划' && !b.disabled))
+  assert.equal(await page.getByLabel('每天执行时间', { exact: true }).inputValue(), '09:30')
+  await page.screenshot({ path: `${root}/review/screenshots/schedule-daily-light.png`, fullPage: true })
+  await page.getByRole('radio', { name: 'Cron 表达式', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Cron 表达式', exact: true }).fill('invalid')
+  await page.getByText('Error: Cron 需要五段：分 时 日 月 周，不包含秒或年份', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: '保存计划', exact: true }).isDisabled(), true)
+  assert.equal((await persisted()).timing.mode, 'daily', 'invalid edits must not change saved timing')
+  await page.getByRole('textbox', { name: 'Cron 表达式', exact: true }).fill('0 9,18 * * 1-5')
+  await save()
+  assert.equal((await persisted()).timing.cron, '0 9,18 * * 1-5')
+  assert.equal((await persisted()).timing.mode, 'cron')
+  await page.waitForTimeout(500)
+  await page.screenshot({ path: `${root}/review/screenshots/schedule-cron-light.png`, fullPage: true })
+  await select('定时探测请求模型', '自定义模型…')
+  await page.getByRole('textbox', { name: '定时探测请求模型（自定义）', exact: true }).fill('custom-model')
+  await save()
+  assert.equal((await persisted()).model, 'custom-model')
+  await page.getByRole('button', { name: '移除 backup@example.com', exact: true }).last().click()
+  await save()
+  assert.deepEqual((await persisted()).accounts.map(a => a.account_id), ['demo-a'])
+  // Use the local preview bridge to supply paused and in-flight fixtures.
+  await page.evaluate(() => {
+    const request = window.codexProxyPlugin.request.bind(window.codexProxyPlugin)
+    window.codexProxyPlugin.request = async input => {
+      if (input.path !== 'api/schedule') return request(input)
+      if (input.method === 'POST') window.savedSchedule = JSON.parse(input.body)
+      const plan = { enabled: true, model: 'gpt-6-astra', interval_minutes: 360, accounts: [
+        { account_id: 'demo-a', name: 'primary@example.com', status: 'paused', pending: null, checked_at: 1700000000000, next_at: 0, message: 'test pause' },
+        { account_id: 'demo-b', name: 'backup@example.com', status: 'waiting', pending: 'inflight', checked_at: null, next_at: 0, message: '' },
+      ] }
+      return { status: 200, contentType: 'application/json', body: new TextEncoder().encode(JSON.stringify(plan)).buffer }
+    }
+  })
+  await page.getByRole('button', { name: '刷新状态', exact: true }).click()
+  await page.getByText('test pause', { exact: true }).waitFor()
+  assert.match(await page.getByRole('combobox', { name: '定时探测请求模型', exact: true }).textContent(), /gpt-6-astra/)
+  assert.equal(await page.getByRole('button', { name: '移除 backup@example.com', exact: true }).last().isDisabled(), true)
+  const resume = page.getByRole('checkbox', { name: '已核对，保存后恢复 primary@example.com', exact: true })
+  await resume.locator('..').click()
+  await select('探测账号', '无邮箱账号'); await page.keyboard.press('Escape')
+  assert.equal(await resume.isChecked(), true)
+  await save()
+  const saved = await page.evaluate(() => window.savedSchedule)
+  assert.deepEqual(saved.account_ids, ['demo-a', 'demo-b', 'demo-c'])
+  assert.deepEqual(saved.resume_accounts, ['demo-a'])
+  await page.goto(`${base}?preview=1&theme=dark`)
+  await select('探测账号', 'primary@example.com'); await page.keyboard.press('Escape')
+  await select('定时探测请求模型', 'gpt-6-astra')
+  await page.getByRole('radio', { name: 'Cron 表达式', exact: true }).click()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.waitForTimeout(600)
+  await page.screenshot({ path: `${root}/review/screenshots/schedule-mobile-dark.png`, fullPage: true })
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false)
+  await page.goto(`${base}?preview=1&scenario=schedule-error`)
+  await page.getByText('Error: 计划读取失败', { exact: true }).waitFor()
+  assert.equal(await page.getByRole('button', { name: '保存计划', exact: true }).isDisabled(), true, 'a failed initial read must not permit overwriting the plan')
+  assert.deepEqual(errors, [])
+  console.log('SCHEDULE PASS: multi-select/save/reload/daily/cron/timezone/invalid-cron/custom-model/remove/paused-state/explicit-resume/in-flight-protection/dark/mobile')
+} finally { await browser.close() }

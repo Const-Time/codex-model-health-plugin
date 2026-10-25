@@ -9,6 +9,7 @@ import { accountDisplayName } from './accountDisplay'
 import { formatTime, methodText, statusText, tierText, verdict, tone, reasonText } from './presentation'
 import SourceUpdates from './SourceUpdates.vue'
 import SchedulePanel from './SchedulePanel.vue'
+import ModelSelect from './ModelSelect.vue'
 
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).get('preview') === '1'
 const bootstrap = ref<Bootstrap | null>(null), history = ref<History[]>([]), run = ref<Run | null>(null)
@@ -101,11 +102,11 @@ onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
         <template #header><div class="flex items-center gap-3"><span class="section-icon"><FlaskConical class="size-5" /></span><div><h2>新建检测</h2><p class="subtitle">使用已有账号，无需填写 API 地址或密钥</p></div></div></template>
         <template #body>
           <p v-if="loading" role="status" class="muted">正在读取宿主账号与检测基线…</p>
-          <p v-else-if="bootstrap && (!bootstrap.accounts.length || !bootstrap.keys.length)" role="status" class="muted">请先在主项目启用 OpenAI 账号和测试 Key，然后刷新。</p>
+          <p v-else-if="bootstrap && !bootstrap.accounts.length" role="status" class="muted">请先在主项目启用 OpenAI 账号，然后刷新。</p>
           <div class="form-grid">
             <div class="field col-span-full"><label id="method-label">检测方法</label><BaseSegmented v-model="method" aria-labelledby="method-label" label="检测方法" :options="methodOptions" :disabled="loading || pumping || action" /></div>
-            <div class="field"><label id="account-label">检测账号</label><BaseSelect v-model="account" aria-labelledby="account-label" :options="accountOptions" :disabled="loading || pumping" placeholder="选择已有账号" searchable /></div>
-            <div class="field"><label id="model-label">请求模型</label><input v-model="model" aria-labelledby="model-label" list="diagnostic-models" class="model-input" :disabled="pumping" placeholder="填写账号支持的模型"><datalist id="diagnostic-models"><option v-for="m in models" :key="m" :value="m" /></datalist></div>
+            <div class="field"><label id="account-label">检测账号</label><BaseSelect v-model="account" aria-labelledby="account-label" :options="accountOptions" :disabled="loading || pumping" placeholder="选择已有账号" filterable /></div>
+            <div class="field"><label id="model-label">请求模型</label><ModelSelect v-model="model" label="请求模型" :models="models" :disabled="loading || pumping" /><p class="muted text-cp-xs m-0">候选来自检测基线，请确认账号支持；也可选择自定义模型。</p></div>
             <div class="field"><label id="claimed-label">对照基线</label><BaseSelect v-if="method === 'meow'" v-model="claimed" aria-labelledby="claimed-label" :options="catalog?.models.map(m=>({value:m.id,label:m.label || m.id})) ?? []" :disabled="loading || pumping" placeholder="选择要核对的模型" /><BaseSelect v-else model-value="unified" aria-labelledby="claimed-label" :options="[{value:'unified',label:`统一候选库 · ${catalog?.models.length ?? 0} 个模型`}]" disabled /></div>
             <div v-if="method === 'meow'" class="field col-span-full"><label id="tier-label">检测档位</label><BaseSegmented v-model="tier" aria-labelledby="tier-label" label="检测档位" :options="tierOptions" :disabled="pumping" /></div>
             <p v-else class="col-span-full muted text-cp-sm m-0">三轮独立数字选择 · 同时比较 GPT / Claude 家族候选</p>
@@ -122,7 +123,7 @@ onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
       </BaseCard>
     </div>
 
-    <SchedulePanel v-if="bootstrap" :accounts="bootstrap.accounts" />
+    <SchedulePanel v-if="bootstrap" :accounts="bootstrap.accounts" :models="models" />
     <BaseCard v-if="run">
       <template #header><div class="flex flex-wrap items-center justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><h2>{{ run.account_name }}</h2><BaseTag :type="tone(run.report,run.status)">{{ pumping && run.status === 'ready' ? '后台排队中' : statusText[run.status] }}</BaseTag><BaseTag>{{ methodText(run.plan.method) }}</BaseTag></div><p class="subtitle">{{ run.plan.request_model }} <span class="mx-1">→</span> {{ run.plan.method === 'modeltrace' ? '统一候选库' : run.plan.claimed_model }} · {{ tierText[run.plan.tier] }}</p></div><div class="flex flex-wrap gap-2"><BaseIconButton label="刷新当前任务" :disabled="action" @click="openRun(run.id)"><RefreshCw class="size-4" /></BaseIconButton><template v-if="!finished"><BaseButton v-if="pumping" size="sm" :disabled="action" @click="control('pause')"><Pause class="size-4" />当前题完成后暂停</BaseButton><BaseButton v-else size="sm" variant="primary" :disabled="action" @click="control('resume')"><Play class="size-4" />继续检测</BaseButton><BaseButton size="sm" :disabled="action" @click="control('stop')"><Square class="size-3" />结束检测</BaseButton></template></div></div></template>
       <template #body>

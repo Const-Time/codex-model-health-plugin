@@ -25,7 +25,7 @@
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 插件 ID / 版本 | `local.model-health` / `0.6.0` |
+| 插件 ID / 版本 | `local.model-health` / `0.7.0` |
 | 进程协议 | RPC v5；必须与本次升级后的宿主配套，旧 3.13.0 的 RPC v4 不能运行此制品 |
 | 宿主清单范围 | `>=3.14.0, <4.0.0`；**还必须支持后台续调 v1 和 `host.account.probe` 管理员诊断扩展**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
@@ -36,16 +36,16 @@
 
 ```text
 仓库：Const-Time/codex-model-health-plugin
-版本标签：v0.6.0（或留空查询最新稳定版）
+版本标签：v0.7.0（或留空查询最新稳定版）
 ```
 
-选择 `local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
+选择 `local.model-health-0.7.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
 
 Release 同时提供同名 `.tar.gz.sha256`；下载两个附件后可校验：
 
 ```sh
-sha256sum -c local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-# macOS：shasum -a 256 -c local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c local.model-health-0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS：shasum -a 256 -c local.model-health-0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。本 fork 维护者为 [Const-Time](https://github.com/Const-Time)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
@@ -137,11 +137,21 @@ Actions 使用固定 SHA 的 [GitHub 官方 checkout](https://github.com/actions
 
 ## RPC v4 升级
 
-v0.6.0 使用上游 `b8479b59` SDK、RPC v5、management v2 和 maintenance v1，须搭配本次新增 `host.account.probe` 的 Const-Time 宿主；最低宿主版本为 3.14.0。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；runs 状态 schema 仍为 1，历史和冻结计划继续读取。
+v0.7.0 使用上游 `b8479b59` SDK、RPC v5、management v2 和 maintenance v1，须搭配本次新增 `host.account.probe` 的 Const-Time 宿主；最低宿主版本为 3.14.0。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；runs 状态 schema 仍为 1，历史和冻结计划继续读取。
 
 ## 定时账号探测
 
-默认关闭，只对手动选中的最多 50 个账号发送短请求。填写所有所选账号支持的模型，设置 60–10080 分钟间隔（默认 360 分钟），保存后从一个间隔后开始。关闭浏览器不影响计划；关闭计划、停用插件或停止宿主后不再开始新请求，已发送请求可能已经消耗上游额度。
+默认关闭，只对手动选中的最多 50 个账号发送短请求。账号支持搜索多选，请求模型支持下拉选择和自定义。可以选择三种调度方式：
+
+- **按间隔**：60–10080 分钟（默认 360 分钟），新增或重新启用后等待一个间隔。
+- **每天指定时间**：选择 `HH:mm` 和执行时区，例如 `09:30`、`Asia/Shanghai` 表示每天北京时间上午 9:30。
+- **Cron 表达式**：五段 `分 时 日 月 周`，不包含秒或年份。`0 9 * * *` 表示每天 09:00；`0 9,18 * * 1-5` 表示工作日 09:00 和 18:00；`0 */6 * * *` 表示每隔六个整点小时。支持数字、范围、列表、步进及星期/月名称；星期 0 或 7 都是周日，日与周同时受限时采用 OR 规则。
+
+界面通过后端只读接口校验并预览后续三次执行时刻，不会发送模型请求。每天/Cron 使用持久化的 IANA 时区，后续浏览器或服务器时区改变不影响计划。夏令时跳过不存在的固定时刻时，会在跳变后的首个有效时刻执行；重复的固定时刻只执行第一次。高频 Cron 在重复小时内遵循实际时刻匹配，预览用于核对。
+
+关闭浏览器不影响计划；关闭计划、停用插件或停止宿主后不再开始新请求，已发送请求可能已经消耗上游额度。宿主约每 30 秒检查一次并逐个执行，多个账号不会在指定秒同时发起。维护延迟或服务恢复后，每个到期账号最多执行一次，随后从当前时刻重新计算下一次，不逐次补发积压的历史周期。
+
+升级会将插件私有 `schedule` 状态从 v1 迁移到 v2，旧间隔、账号、下次执行时间、暂停状态和未决标记全部保留，检测历史命名空间不变；不修改主程序数据库。旧插件不支持 v2 定时状态，不能直接降级覆盖新计划。
 
 每轮宿主维护最多执行一个账号，和手动检测共享串行锁；每次短请求请求 32 输出 token、最多等待 20 秒，不补发错过的周期。Codex OAuth 后端不支持输出 token 参数，沿用宿主适配移除该字段，依靠串行、超时和取消限制资源占用。失败、空回复、截断或重启后结果未知时暂停对应账号，核对后勾选恢复并保存。暂停账号不会因普通保存或重新开启总开关而自动恢复。
 

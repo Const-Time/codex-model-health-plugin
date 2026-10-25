@@ -28,6 +28,14 @@ pub fn plugin(engine: engine::Engine) -> Result<ComposedPlugin, AuthorError> {
     let scheduled = Arc::clone(&service);
     PluginBuilder::from_json(include_bytes!("../../plugin.json"))?
         .on(
+            gateway_plugin_sdk::client::methods::STATE_MIGRATE,
+            |call| async move {
+                Ok(gateway_plugin_sdk::client::TypedReply::new(
+                    schedule::migrate(call.request)?,
+                ))
+            },
+        )?
+        .on(
             gateway_plugin_sdk::client::methods::RECONCILE,
             move |call| {
                 let service = Arc::clone(&scheduled);

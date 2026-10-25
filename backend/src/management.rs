@@ -24,6 +24,7 @@ pub fn registration() -> ManagementRegistration {
             ("POST", "api/runs/control"),
             ("GET", "api/schedule"),
             ("POST", "api/schedule"),
+            ("POST", "api/schedule/preview"),
         ]
         .into_iter()
         .map(|(method, path)| ManagementRoute {
@@ -217,6 +218,7 @@ async fn dispatch(
         return Err(invalid("管理请求大小或查询参数不符合接口"));
     }
     match (call.request.method.as_str(), call.request.path.as_str()) {
+        ("POST", "api/schedule/preview") => reply(crate::schedule::preview(input(&call)?)?),
         ("GET", "api/schedule") => reply(
             serde_json::to_value(crate::schedule::read(&call.host).await?.0)
                 .map_err(|_| invalid("计划编码失败"))?,

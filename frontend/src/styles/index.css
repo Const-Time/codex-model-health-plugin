@@ -32,7 +32,6 @@ h2 { margin: 0; font-size: 1.125rem; font-weight: 700; }
 .sample-progress::-webkit-progress-value { background: var(--cp-color-primary); border-radius: 1rem; }
 .report-grid { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 2rem; }
 .candidate { margin: 1rem 0; }
-.model-input { width: 100%; min-height: 2.5rem; padding: .6rem .75rem; border: 1px solid var(--cp-color-border); border-radius: var(--cp-border-radius); background: var(--cp-color-bg-container); color: var(--cp-color-text); }
 .candidate-track { height: .45rem; border-radius: 1rem; background: var(--cp-color-fill-secondary); margin-top: .5rem; overflow: hidden; }
 .candidate-track > div { height: 100%; background: var(--cp-color-primary); border-radius: 1rem; }
 .report-note { padding: 1.2rem; border-radius: var(--cp-border-radius); background: var(--cp-color-fill-quaternary); font-size: .875rem; color: var(--cp-color-text-secondary); line-height: 1.7; }

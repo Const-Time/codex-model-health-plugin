@@ -13,6 +13,7 @@ export async function api<T>(path: string, data?: object): Promise<T> {
 }
 
 export type Method = 'meow' | 'modeltrace'
+export interface ScheduleTiming { mode: 'interval' | 'daily' | 'cron'; daily_time: string; cron: string; timezone: string }
 export interface MethodCatalog { method: Method; label: string; engine_version: string; id: string; version: string; hash: string; models: {id: string; label?: string}[]; tiers: {id: string; count: number}[]; family_count?: number }
 export interface Catalog { methods: MethodCatalog[] }
 export interface UpstreamSource { method: Method; label: string; url: string; bundled_commit: string }

@@ -26,7 +26,22 @@ export function installPreview() {
   document.body.style.padding='24px'
   const runs: Run[] = params.get('scenario') === 'empty' ? [] : [example('0-1')]
   const active = new Set<string>()
-  let schedule = { enabled:false, model:'', interval_minutes:360, accounts:[] as {account_id:string;name:string;next_at:number;status:string;checked_at:null;message:string;pending:null}[] }
+  let schedule = { enabled:false, model:'', interval_minutes:360, timing:{mode:'interval',daily_time:'09:00',cron:'0 9 * * *',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone}, accounts:[] as {account_id:string;name:string;next_at:number;status:string;checked_at:null;message:string;pending:null}[] }
+  // Development fixture only. Production previews use the Rust scheduler, including DST rules.
+  function scheduleDates(timing: typeof schedule.timing, interval: number) {
+    if (timing.mode === 'interval') return [1,2,3].map(i => Date.now()+i*interval*60000)
+    if (timing.mode === 'cron' && !['0 9 * * *','0 9,18 * * 1-5'].includes(timing.cron)) throw new Error('独立预览仅支持示例表达式；实际插件由后端校验')
+    const [hour, minute] = timing.daily_time.split(':').map(Number)
+    const hours = timing.mode === 'daily' ? [hour] : timing.cron.includes('9,18') ? [9,18] : [9]
+    const formatter = new Intl.DateTimeFormat('en-US', {timeZone:timing.timezone,hour:'numeric',minute:'numeric',weekday:'short',hourCycle:'h23'})
+    const dates: number[] = []
+    const start = Math.floor(Date.now()/60000)*60000+60000
+    for (let at=start; at<start+8*86400000 && dates.length<3; at+=60000) {
+      const parts = Object.fromEntries(formatter.formatToParts(at).map(part=>[part.type,part.value]))
+      if (hours.includes(Number(parts.hour)) && Number(parts.minute)===(timing.mode==='daily'?minute:0) && !(timing.mode==='cron' && timing.cron.endsWith('1-5') && ['Sat','Sun'].includes(parts.weekday!))) dates.push(at)
+    }
+    return dates
+  }
   async function drive(run: Run) {
     if (active.has(run.id)) return
     active.add(run.id)
@@ -41,7 +56,7 @@ export function installPreview() {
     const data = input.body ? JSON.parse(input.body) : {}
     const respond=(value: unknown,status=200)=>({status,contentType:'application/json',body:new TextEncoder().encode(JSON.stringify(value)).buffer})
     if (params.get('scenario') === 'error') return respond({message:'模拟：宿主账号目录读取失败，请重试'},503)
-    if (input.path === 'api/bootstrap') return respond({background_supported:true,catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[{id:'demo-k',name:'模型体检专用',enabled:true}]})
+    if (input.path === 'api/bootstrap') return respond({background_supported:true,catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[]})
     if (input.path === 'api/upstreams/check') {
       const source = sources.find(s=>s.method===data.method)!
       const scenario = params.get('updates')
@@ -52,8 +67,14 @@ export function installPreview() {
       return respond({check:{method:source.method,status,checked_at:Date.now(),latest_commit:latest,ahead_by:status==='ahead'||status==='diverged'?2:0,behind_by:status==='behind'||status==='diverged'?1:0,compare_url:`${source.url}/compare/${source.bundled_commit}...${latest}`}})
     }
     if (input.path === 'api/models') return respond({models:['gpt-6-astra','gpt-5.6-sol']})
+    if (input.path === 'api/schedule/preview') {
+      if (data.timing.mode === 'cron' && (data.timing.cron.trim().split(/\s+/).length !== 5 || data.timing.cron.includes('invalid'))) return respond({message:'Cron 需要五段：分 时 日 月 周，不包含秒或年份'},400)
+      try { return respond({next_at:scheduleDates(data.timing,data.interval_minutes),timezone:data.timing.timezone}) }
+      catch (cause) { return respond({message:String(cause)},400) }
+    }
     if (input.path === 'api/schedule') {
-      if (input.body) schedule = {enabled:data.enabled,model:data.model,interval_minutes:data.interval_minutes,accounts:data.account_ids.map((id:string)=>({account_id:id,name:previewAccounts.find(a=>a.id===id)?.email || id,next_at:Date.now()+data.interval_minutes*60000,status:'waiting',checked_at:null,message:'',pending:null}))}
+      if (params.get('scenario') === 'schedule-error') return respond({message:'计划读取失败'},503)
+      if (input.body) schedule = {enabled:data.enabled,model:data.model,interval_minutes:data.interval_minutes,timing:data.timing || schedule.timing,accounts:data.account_ids.map((id:string)=>({account_id:id,name:previewAccounts.find(a=>a.id===id)?.email || id,next_at:scheduleDates(data.timing || schedule.timing,data.interval_minutes)[0]!,status:'waiting',checked_at:null,message:'',pending:null}))}
       return respond(schedule)
     }
     if (input.path === 'api/runs') return respond({runs:runs.map(summary)})

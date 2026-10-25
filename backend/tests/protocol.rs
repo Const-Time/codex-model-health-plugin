@@ -1383,3 +1383,128 @@ async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_ac
     assert!(host.executions.is_empty());
     assert_eq!(host.state["settings"].0["accounts"][1]["status"], "paused");
 }
+
+#[tokio::test]
+async fn calendar_preview_is_read_only_and_invalid_schedules_never_write_or_probe() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let timing = json!({"mode":"cron","cron":"0 9,18 * * 1-5","daily_time":"09:30","timezone":"Asia/Shanghai"});
+    let preview = peer
+        .api(
+            "api/schedule/preview",
+            Some(json!({"interval_minutes":360,"timing":timing})),
+            &mut host,
+        )
+        .await
+        .unwrap();
+    let dates = preview["next_at"].as_array().unwrap();
+    assert_eq!(dates.len(), 3);
+    assert!(
+        dates
+            .windows(2)
+            .all(|pair| pair[0].as_u64() < pair[1].as_u64())
+    );
+    assert!(
+        host.callbacks.is_empty(),
+        "preview must not read accounts, write state or run inference"
+    );
+    for bad in [
+        json!({"mode":"cron","cron":"* * * * * *","timezone":"UTC"}),
+        json!({"mode":"cron","cron":"0 0 31 2 *","timezone":"UTC"}),
+        json!({"mode":"daily","daily_time":"99:00","timezone":"UTC"}),
+        json!({"mode":"daily","daily_time":"09:00","timezone":"missing/timezone"}),
+    ] {
+        let mut config = schedule_input();
+        config["timing"] = bad;
+        let error = peer
+            .api("api/schedule", Some(config), &mut host)
+            .await
+            .unwrap_err();
+        assert_eq!(error.http_status, Some(400));
+    }
+    assert!(host.callbacks.is_empty());
+    assert!(host.executions.is_empty());
+}
+
+#[tokio::test]
+async fn calendar_schedule_persists_and_advances_from_now_without_replaying_backlog() {
+    use chrono::{Datelike, Timelike};
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let mut config = schedule_input();
+    config["account_ids"] = json!(["account-a"]);
+    config["timing"] = json!({"mode":"daily","daily_time":"09:30","timezone":"Asia/Shanghai"});
+    let saved = peer
+        .api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(saved["timing"]["mode"], "daily");
+    let next = saved["accounts"][0]["next_at"].as_u64().unwrap();
+    let date = chrono::DateTime::from_timestamp_millis(next as i64)
+        .unwrap()
+        .with_timezone(&chrono_tz::Asia::Shanghai);
+    assert_eq!((date.hour(), date.minute()), (9, 30));
+    drop(peer);
+    let mut peer = Peer::new().await;
+    assert_eq!(
+        peer.api("api/schedule", None, &mut host).await.unwrap(),
+        saved
+    );
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    config["timing"] = json!({"mode":"cron","cron":"0 9,18 * * 1-5","timezone":"Asia/Shanghai"});
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 1);
+    let value = host.state["settings"].0["accounts"][0]["next_at"]
+        .as_i64()
+        .unwrap();
+    let date = chrono::DateTime::from_timestamp_millis(value)
+        .unwrap()
+        .with_timezone(&chrono_tz::Asia::Shanghai);
+    assert_eq!(date.minute(), 0);
+    assert!([9, 18].contains(&date.hour()));
+    assert!(date.weekday().number_from_monday() <= 5);
+    host.state.get_mut("settings").unwrap().0["accounts"][0]["status"] = json!("paused");
+    config["timing"]["cron"] = json!("0 8 * * *");
+    let updated = peer
+        .api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(
+        updated["accounts"][0]["status"], "paused",
+        "editing timing cannot resume a failed account"
+    );
+}
+
+#[tokio::test]
+async fn schedule_schema_upgrade_preserves_legacy_due_times_and_uncertain_markers() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let mut legacy = peer
+        .api("api/schedule", Some(schedule_input()), &mut host)
+        .await
+        .unwrap();
+    legacy.as_object_mut().unwrap().remove("timing");
+    legacy["accounts"][0]["pending"] = json!("uncertain-operation");
+    legacy["accounts"][1]["status"] = json!("paused");
+    let id = peer.sequence;
+    peer.send(Frame {
+        message: Message::Call { id, method: "plugin.state.migrate".into(),
+            context: CallContext { request:None,call_id:id,instance_id:"test".into(),generation:1,incarnation:"test".into(),stage:Stage::Configuration,timeout_ms:30000,resource_stream:false,resource_scope_id:"scope".into(),request_id:None,attempt_id:None,account_id:None,credential_revision:None }, params:json!({}) },
+        payload: serde_json::to_vec(&json!({"namespace":"schedule","from_schema_version":1,"to_schema_version":2,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap(),
+    }).await;
+    let response = peer.receive().await;
+    assert!(matches!(response.message, Message::Result { .. }));
+    let changes: Value = serde_json::from_slice(&response.payload).unwrap();
+    let value = &changes["changes"][0]["value"];
+    assert_eq!(changes["changes"][0]["action"], "replace");
+    assert_eq!(value["timing"]["mode"], "interval");
+    assert_eq!(value["accounts"], legacy["accounts"]);
+    assert_eq!(value["enabled"], legacy["enabled"]);
+    assert_eq!(value["interval_minutes"], legacy["interval_minutes"]);
+}
