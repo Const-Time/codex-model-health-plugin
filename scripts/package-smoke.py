@@ -1,4 +1,4 @@
-"""Exercise the packaged executable over SDK v4; public GitHub checks are opt-in."""
+"""Exercise the packaged executable over SDK v5; public GitHub checks are opt-in."""
 import hashlib
 import json
 import os
@@ -126,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             url = params["url"]
             pattern = r"https://api\.github\.com/repos/(chen-006/meow-llm-detector|xqy2006/ModelTrace)/(commits\?per_page=1|compare/[0-9a-f]{40}\.\.\.[0-9a-f]{40}\?per_page=1&page=2)"
             assert re.fullmatch(pattern, url), url
-            headers = dict(params["headers"])
+            headers = {name: bytes(value).decode("utf-8") for name, value in params["headers"]}
             assert set(headers) == {"User-Agent", "Accept", "X-GitHub-Api-Version"}
             assert headers["User-Agent"] == f'codex-model-health/{manifest["version"]}'
             status = 200
@@ -150,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
                     data = [{"sha": source["bundled_commit"] if source["method"] == "meow" else "a" * 40}]
                 body = json.dumps(data).encode()
             host["http_body"] = body
-            return {"status": status, "headers": [], "stream": "github"}, b""
+            return {"status": status, "http_version": "HTTP/1.1", "headers": [], "trailers": [], "stream": "github"}, b""
         if method == "host.http.stream_read":
             assert params["stream"] == "github" and not payload
             body = host["http_body"]
@@ -170,16 +170,25 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         if method == "host.auth.get_runtime":
             assert json.loads(payload)["account_id"] == "smoke-account"
             return {}, json.dumps(runtime_account()).encode()
+        if method == "host.account.probe":
+            assert params["account_id"] == "smoke-account"
+            assert params["model"] == "gpt-6-astra"
+            assert any(r["value"].get("inflight") for r in host["state"].values())
+            body = json.loads(payload)
+            assert body["stream"] is True and body["store"] is False
+            host["executions"] += 1
+            answer = ','.join(str(1 + (i * 37 + 13) % 355) for i in range(332)) if host["numeric"] else "3"
+            return {"complete": True, "text": answer, "status": "ok"}, b""
         if method == "host.keys.list":
             return {"keys": [{"id": "smoke-key", "name": "Offline key", "enabled": True}], "next_cursor": None}, b""
         if method == "host.models.list":
             assert params["client_key_id"] == "smoke-key" and params["protocol"] == "openai"
             return {"models": ["gpt-6-astra"]}, b""
         if method == "host.state.get":
-            assert params["namespace"] == "runs"
+            assert params["namespace"] in ("runs", "schedule")
             return {"record": host["state"].get(params["key"])}, b""
         if method == "host.state.put":
-            assert params["namespace"] == "runs"
+            assert params["namespace"] in ("runs", "schedule")
             previous = host["state"].get(params["key"])
             assert params["expected_version"] == (previous["version"] if previous else None)
             version = previous["version"] + 1 if previous else 1
@@ -227,7 +236,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             send({"type": "result", "id": message["id"], "result": result}, response)
 
     try:
-        send({"type": "hello", "handshake": {"protocol_version": 4, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
+        send({"type": "hello", "handshake": {"protocol_version": 5, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
         ready, _ = receive()
         assert ready["type"] == "ready"
         context = {"call_id": 1, "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "stage": "management", "timeout_ms": 120000, "resource_stream": False, "resource_scope_id": "smoke", "request_id": None, "attempt_id": None, "account_id": None, "credential_revision": None}
@@ -238,13 +247,13 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         assert meow["engine_version"] == "4.5.4"
         assert sorted(t["count"] for t in meow["tiers"]) == [36, 72, 108]
         assert len(meow["models"]) == 4
-        assert boot["accounts"][0]["id"] == "smoke-account" and boot["keys"][0]["id"] == "smoke-key"
+        assert boot["accounts"][0]["id"] == "smoke-account" and boot["keys"] == []
         assert boot["accounts"][0]["email"] == "  smoke@example.com  "
-        assert host["callbacks"] == ["host.auth.list", "host.keys.list"]
+        assert host["callbacks"] == ["host.auth.list"]
         status, error = api("api/models", {})
         assert status == 400 and error["error"]["message"] == "请求参数格式错误", error
         if continuous:
-            status, result = api("api/runs/start", {"account_id": "smoke-account", "key_id": "smoke-key",
+            status, result = api("api/runs/start", {"account_id": "smoke-account",
                                 "request_model": "gpt-6-astra", "claimed_model": "gpt-6-astra", "tier": "low"})
             assert status == 200, result
             assert result["run"]["account_id"] == "smoke-account"
@@ -264,7 +273,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             assert result["run"]["status"] == "completed" and result["run"]["report"]["valid_samples"] == 36
             attempts = result["run"]["attempts"]
             assert len({a["job_id"] for a in attempts}) == 36
-            assert [a["request_id"] for a in attempts] == [f"fixture-request-{i}" for i in range(1, 37)]
+            assert [a["request_id"] for a in attempts] == ["" for _ in range(36)]
             assert host["executions"] == 36 and runtime_account()["credential_revision"] == 37
             status, restored = api("api/runs/get", {"id": run_id})
             assert status == 200
@@ -276,7 +285,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
                 sys.exit(1)
             trace = next(c for c in catalogs if c["method"] == "modeltrace")
             assert len(trace["models"]) == 17 and trace["family_count"] == 2
-            status, result = api("api/runs/start", {"method": "modeltrace", "account_id": "smoke-account", "key_id": "smoke-key",
+            status, result = api("api/runs/start", {"method": "modeltrace", "account_id": "smoke-account",
                                 "request_model": "gpt-6-astra", "claimed_model": "unified", "tier": "fixed"})
             assert status == 200, result
             assert result["run"]["account_id"] == "smoke-account"
@@ -304,7 +313,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             status, history = api("api/runs")
             assert status == 200 and history["runs"][0]["method"] == "modeltrace"
             assert history["runs"][0]["report"] == result["run"]["report"]
-            print("MODELTRACE PASS: completed=3/3; candidates=17; pinned_account_key=PASS; frozen_plan=PASS; pause_resume=PASS; history=PASS; real_model_calls=0", flush=True)
+            print("MODELTRACE PASS: completed=3/3; candidates=17; pinned_account=PASS; keyless=PASS; frozen_plan=PASS; pause_resume=PASS; history=PASS; real_model_calls=0", flush=True)
         if updates:
             if "sources" not in boot:
                 print("UPDATES ABSENT: sources=0; model_methods=2; real_model_calls=0", flush=True)
@@ -335,7 +344,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         send({"type": "shutdown"})
         process.wait(timeout=15)
         assert process.returncode == 0, process.stderr.read().decode()
-        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v4=PASS; engine=4.5.4; accounts=1; keys=1; error_http=400; real_model_calls=0")
+        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v5=PASS; engine=4.5.4; accounts=1; keys=0; error_http=400; real_model_calls=0")
     finally:
         if process.poll() is None:
             subprocess.run(["docker", "rm", "-f", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

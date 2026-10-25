@@ -8,17 +8,18 @@ import type { Bootstrap, Run, History, Method } from './api'
 import { accountDisplayName } from './accountDisplay'
 import { formatTime, methodText, statusText, tierText, verdict, tone, reasonText } from './presentation'
 import SourceUpdates from './SourceUpdates.vue'
+import SchedulePanel from './SchedulePanel.vue'
 
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).get('preview') === '1'
 const bootstrap = ref<Bootstrap | null>(null), history = ref<History[]>([]), run = ref<Run | null>(null)
 const loading = ref(true), error = ref(''), action = ref(false), pumping = ref(false), modelsLoading = ref(false), starting = ref(false)
-const account = ref(''), key = ref(''), model = ref(''), claimed = ref(''), tier = ref('low'), models = ref<string[]>([])
+const account = ref(''), model = ref(''), claimed = ref(''), tier = ref('low'), models = ref<string[]>([])
 const method = ref<Method>('meow')
 const catalog = computed(() => bootstrap.value?.catalog.methods.find(c => c.method === method.value))
 const methodOptions = computed(() => bootstrap.value?.catalog.methods.map(c => ({value:c.method,label:c.label})) ?? [])
 watch(method, value => { tier.value = value === 'modeltrace' ? 'fixed' : 'low'; claimed.value = value === 'modeltrace' ? 'unified' : '' })
 const reportView = ref('fingerprint')
-let disposed = false, modelSequence = 0
+let disposed = false
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 let polling = false, runSequence = 0, lastHistoryRefresh = 0
 const tierOptions = computed(() => catalog.value?.tiers.map(t => ({value:t.id,label:`${({low:'快速',medium:'标准',high:'完整'} as Record<string,string>)[t.id]} · ${t.count} 题`})) ?? [])
@@ -26,7 +27,7 @@ const count = computed(() => catalog.value?.tiers.find(t => t.id === tier.value)
 const finished = computed(() => run.value?.status === 'completed' || run.value?.status === 'stopped')
 const valid = computed(() => run.value?.attempts.filter(a => a.status === 'ok').length ?? 0)
 const failures = computed(() => run.value?.attempts.filter(a => a.status === 'error').length ?? 0)
-const canStart = computed(() => account.value && key.value && model.value && claimed.value && !loading.value && !modelsLoading.value && !action.value && !pumping.value && !error.value && bootstrap.value?.background_supported === true)
+const canStart = computed(() => account.value && model.value && claimed.value && !loading.value && !modelsLoading.value && !action.value && !pumping.value && !error.value && bootstrap.value?.background_supported === true)
 const lastError = computed(() => [...(run.value?.attempts ?? [])].reverse().find(a => a.status === 'error')?.error)
 const traceReport = computed(() => run.value?.report.method === 'modeltrace' ? run.value.report : null)
 const candidates = computed<[string, number][]>(() => {
@@ -41,20 +42,10 @@ function message(cause: unknown) { return cause instanceof Error ? cause.message
 async function loadHistory() { history.value = (await api<{runs: History[]}>('runs')).runs; lastHistoryRefresh = Date.now() }
 async function load() {
   loading.value = true; error.value = ''
-  try { bootstrap.value = await api<Bootstrap>('bootstrap'); await loadHistory(); if (key.value) await loadModels(key.value) }
+  try { bootstrap.value = await api<Bootstrap>('bootstrap'); await loadHistory(); models.value = [...new Set(bootstrap.value.catalog.methods.flatMap(c => c.models.map(m => m.id)))] }
   catch (cause) { error.value = message(cause) }
   finally { loading.value = false }
 }
-async function loadModels(value: string) {
-  const sequence = ++modelSequence
-  model.value = ''; models.value = []; error.value = ''
-  if (!value) return
-  modelsLoading.value = true
-  try { const result = await api<{models: string[]}>('models', {key_id:value}); if (sequence === modelSequence) models.value = result.models }
-  catch (cause) { if (sequence === modelSequence) error.value = message(cause) }
-  finally { if (sequence === modelSequence) modelsLoading.value = false }
-}
-watch(key, value => { void loadModels(value) })
 async function operate(fn: () => Promise<void>) {
   if (action.value) return
   action.value = true; runSequence++; error.value = ''
@@ -81,7 +72,7 @@ async function poll() {
 async function start() {
   starting.value = true
   await operate(async () => {
-    const result = await api<{run: Run; background_running: boolean}>('runs/start', {method:method.value,account_id:account.value,key_id:key.value,request_model:model.value,claimed_model:claimed.value,tier:tier.value}); run.value = result.run; pumping.value = result.background_running
+    const result = await api<{run: Run; background_running: boolean}>('runs/start', {method:method.value,account_id:account.value,request_model:model.value,claimed_model:claimed.value,tier:tier.value}); run.value = result.run; pumping.value = result.background_running
     reportView.value = 'fingerprint'
     await loadHistory()
   })
@@ -114,13 +105,12 @@ onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
           <div class="form-grid">
             <div class="field col-span-full"><label id="method-label">检测方法</label><BaseSegmented v-model="method" aria-labelledby="method-label" label="检测方法" :options="methodOptions" :disabled="loading || pumping || action" /></div>
             <div class="field"><label id="account-label">检测账号</label><BaseSelect v-model="account" aria-labelledby="account-label" :options="accountOptions" :disabled="loading || pumping" placeholder="选择已有账号" searchable /></div>
-            <div class="field"><label id="key-label">计量 Key</label><BaseSelect v-model="key" aria-labelledby="key-label" :options="bootstrap?.keys.map(k=>({value:k.id,label:k.name})) ?? []" :disabled="loading || pumping" placeholder="选择用于计量的 Key" searchable /></div>
-            <div class="field"><label id="model-label">请求模型</label><BaseSelect v-model="model" aria-labelledby="model-label" :options="models.map(m=>({value:m,label:m}))" :loading="modelsLoading" :disabled="!key || pumping" placeholder="先选择计量 Key" searchable /></div>
+            <div class="field"><label id="model-label">请求模型</label><input v-model="model" aria-labelledby="model-label" list="diagnostic-models" class="model-input" :disabled="pumping" placeholder="填写账号支持的模型"><datalist id="diagnostic-models"><option v-for="m in models" :key="m" :value="m" /></datalist></div>
             <div class="field"><label id="claimed-label">对照基线</label><BaseSelect v-if="method === 'meow'" v-model="claimed" aria-labelledby="claimed-label" :options="catalog?.models.map(m=>({value:m.id,label:m.label || m.id})) ?? []" :disabled="loading || pumping" placeholder="选择要核对的模型" /><BaseSelect v-else model-value="unified" aria-labelledby="claimed-label" :options="[{value:'unified',label:`统一候选库 · ${catalog?.models.length ?? 0} 个模型`}]" disabled /></div>
             <div v-if="method === 'meow'" class="field col-span-full"><label id="tier-label">检测档位</label><BaseSegmented v-model="tier" aria-labelledby="tier-label" label="检测档位" :options="tierOptions" :disabled="pumping" /></div>
             <p v-else class="col-span-full muted text-cp-sm m-0">三轮独立数字选择 · 同时比较 GPT / Claude 家族候选</p>
           </div>
-          <div class="start-row"><p class="muted text-cp-xs">{{ count }} 个样本 · 最多 {{ count + Math.ceil(count/2) }} 次请求（含重试）<br>真实调用会计入所选 Key 的用量；每次仅检测一个请求。</p><BaseButton variant="primary" :disabled="!canStart" :loading="starting" @click="start"><Play class="size-4" />开始检测</BaseButton></div>
+          <div class="start-row"><p class="muted text-cp-xs">{{ count }} 个样本 · 最多 {{ count + Math.ceil(count/2) }} 次请求（含重试）<br>使用账号的真实上游额度，不扣用户 Key 额度；每次仅检测一个请求。</p><BaseButton variant="primary" :disabled="!canStart" :loading="starting" @click="start"><Play class="size-4" />开始检测</BaseButton></div>
         </template>
       </BaseCard>
       <BaseCard>
@@ -132,6 +122,7 @@ onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
       </BaseCard>
     </div>
 
+    <SchedulePanel v-if="bootstrap" :accounts="bootstrap.accounts" />
     <BaseCard v-if="run">
       <template #header><div class="flex flex-wrap items-center justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><h2>{{ run.account_name }}</h2><BaseTag :type="tone(run.report,run.status)">{{ pumping && run.status === 'ready' ? '后台排队中' : statusText[run.status] }}</BaseTag><BaseTag>{{ methodText(run.plan.method) }}</BaseTag></div><p class="subtitle">{{ run.plan.request_model }} <span class="mx-1">→</span> {{ run.plan.method === 'modeltrace' ? '统一候选库' : run.plan.claimed_model }} · {{ tierText[run.plan.tier] }}</p></div><div class="flex flex-wrap gap-2"><BaseIconButton label="刷新当前任务" :disabled="action" @click="openRun(run.id)"><RefreshCw class="size-4" /></BaseIconButton><template v-if="!finished"><BaseButton v-if="pumping" size="sm" :disabled="action" @click="control('pause')"><Pause class="size-4" />当前题完成后暂停</BaseButton><BaseButton v-else size="sm" variant="primary" :disabled="action" @click="control('resume')"><Play class="size-4" />继续检测</BaseButton><BaseButton size="sm" :disabled="action" @click="control('stop')"><Square class="size-3" />结束检测</BaseButton></template></div></div></template>
       <template #body>

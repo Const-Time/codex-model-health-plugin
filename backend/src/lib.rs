@@ -2,6 +2,7 @@ pub mod domain;
 pub mod engine;
 mod host;
 mod management;
+mod schedule;
 mod updates;
 
 use gateway_plugin_sdk::{
@@ -24,7 +25,20 @@ pub fn plugin(engine: engine::Engine) -> Result<ComposedPlugin, AuthorError> {
         execution: Semaphore::new(1),
         updates: updates::UpdateChecker::default(),
     });
+    let scheduled = Arc::clone(&service);
     PluginBuilder::from_json(include_bytes!("../../plugin.json"))?
+        .on(
+            gateway_plugin_sdk::client::methods::RECONCILE,
+            move |call| {
+                let service = Arc::clone(&scheduled);
+                async move {
+                    schedule::tick(&service, &call.host).await?;
+                    Ok(gateway_plugin_sdk::client::TypedReply::new(
+                        gateway_plugin_sdk::client::Empty {},
+                    ))
+                }
+            },
+        )?
         .management(management::registration(), move |call| {
             let service = Arc::clone(&service);
             async move { management::handle(&service, call).await }

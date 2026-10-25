@@ -173,6 +173,58 @@ impl Peer {
             }
         }
     }
+    async fn reconcile(&mut self, host: &mut Host) {
+        let id = self.sequence;
+        self.sequence += 2;
+        self.send(Frame::control(Message::Call {
+            id,
+            method: "plugin.reconcile".into(),
+            context: CallContext {
+                request: None,
+                call_id: id,
+                instance_id: "test".into(),
+                generation: 1,
+                incarnation: "test".into(),
+                stage: Stage::Maintenance,
+                timeout_ms: 30000,
+                resource_stream: false,
+                resource_scope_id: "scope".into(),
+                request_id: None,
+                attempt_id: None,
+                account_id: None,
+                credential_revision: None,
+            },
+            params: json!({}),
+        }))
+        .await;
+        loop {
+            let frame = self.receive().await;
+            match frame.message {
+                Message::Callback {
+                    id: cid,
+                    parent_id,
+                    method,
+                    params,
+                } => {
+                    assert_eq!(parent_id, id);
+                    let reply = match host.callback(&method, params, frame.payload) {
+                        Ok((result, payload)) => Frame {
+                            message: Message::Result { id: cid, result },
+                            payload,
+                        },
+                        Err(error) => Frame::control(Message::Error { id: cid, error }),
+                    };
+                    self.send(reply).await;
+                }
+                Message::Result { id: rid, result } => {
+                    assert_eq!(rid, id);
+                    assert_eq!(result, json!({}));
+                    return;
+                }
+                other => panic!("unexpected reconcile frame: {other:?}"),
+            }
+        }
+    }
     async fn start(&mut self, host: &mut Host) -> Value {
         self.api("api/runs/start",Some(json!({"account_id":"account-b","key_id":"key-b","request_model":"gpt-6-astra","claimed_model":"gpt-6-astra","tier":"low"})),host).await.unwrap()["run"].clone()
     }
@@ -231,14 +283,14 @@ impl Host {
                     self.http_body.is_none(),
                     "previous HTTP body was not released"
                 );
-                let headers: Vec<(String, String)> =
+                let headers: Vec<(String, Vec<u8>)> =
                     serde_json::from_value(params["headers"].clone()).unwrap();
                 assert_eq!(headers.len(), 3);
                 assert_eq!(
                     headers[0],
                     (
                         "User-Agent".into(),
-                        format!("codex-model-health/{}", env!("CARGO_PKG_VERSION"))
+                        format!("codex-model-health/{}", env!("CARGO_PKG_VERSION")).into_bytes()
                     )
                 );
                 assert_eq!(
@@ -255,7 +307,9 @@ impl Host {
                 }
                 let (status, body) = self.http.pop_front().expect("unexpected HTTP request");
                 self.http_body = Some(body);
-                metadata(json!({"status":status,"headers":[],"stream":"github"}))
+                metadata(
+                    json!({"status":status,"http_version":"HTTP/1.1","headers":[],"trailers":[],"stream":"github"}),
+                )
             }
             "host.http.stream_read" => {
                 assert!(payload.is_empty());
@@ -291,6 +345,22 @@ impl Host {
                         .unwrap(),
                 ))
             }
+            "host.account.probe" => {
+                assert!(self.state.values().any(|(v, _)| {
+                    v["inflight"].is_string()
+                        || v["accounts"]
+                            .as_array()
+                            .is_some_and(|a| a.iter().any(|e| e["pending"].is_string()))
+                }));
+                self.executions.push(params);
+                self.bodies.push(serde_json::from_slice(&payload).unwrap());
+                if self.fail {
+                    let mut fault = PluginFault::new(ErrorCode::Upstream, "fixture");
+                    fault.http_status = Some(429);
+                    return Err(fault);
+                }
+                metadata(json!({"complete":true,"text":"3","status":"ok"}))
+            }
             "host.keys.list" => {
                 let next = params["cursor"].is_null();
                 metadata(
@@ -303,14 +373,20 @@ impl Host {
                 metadata(json!({"models":["gpt-6-astra"]}))
             }
             "host.state.get" => {
-                assert_eq!(params["namespace"], "runs");
+                assert!(matches!(
+                    params["namespace"].as_str(),
+                    Some("runs" | "schedule")
+                ));
                 let record = self.state.get(params["key"].as_str().unwrap()).map(
                     |(value, version)| json!({"value":value,"version":version,"schema_version":1}),
                 );
                 metadata(json!({"record":record}))
             }
             "host.state.put" => {
-                assert_eq!(params["namespace"], "runs");
+                assert!(matches!(
+                    params["namespace"].as_str(),
+                    Some("runs" | "schedule")
+                ));
                 let key = params["key"].as_str().unwrap().to_string();
                 let current = self.state.get(&key).map(|(_, v)| *v);
                 if current != params["expected_version"].as_u64() {
@@ -1198,4 +1274,112 @@ async fn unsupported_host_rejects_before_any_state_or_model_calls() {
     assert!(host.state.is_empty());
     assert!(host.executions.is_empty());
     assert!(peer.continuation.is_none());
+}
+
+#[tokio::test]
+async fn keyless_run_uses_native_probe_without_customer_keys() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let run=peer.api("api/runs/start",Some(json!({"account_id":"account-b","request_model":"gpt-6-astra","claimed_model":"gpt-6-astra","tier":"low"})),&mut host).await.unwrap()["run"].clone();
+    let result = peer
+        .api("api/runs/step", Some(json!({"id":run["id"]})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(result["run"]["attempts"][0]["status"], "ok");
+    assert_eq!(host.executions.len(), 1);
+    assert!(host.callbacks.iter().any(|m| m == "host.account.probe"));
+    assert!(!host.callbacks.iter().any(|m| m.starts_with("host.keys.")
+        || m == "host.models.list"
+        || m.starts_with("host.model.")));
+}
+fn schedule_input() -> Value {
+    json!({"enabled":true,"model":"gpt-6-astra","interval_minutes":60,"account_ids":["account-a","account-b"]})
+}
+fn due(host: &mut Host) {
+    for entry in host.state.get_mut("settings").unwrap().0["accounts"]
+        .as_array_mut()
+        .unwrap()
+    {
+        entry["next_at"] = json!(0);
+    }
+}
+#[tokio::test]
+async fn schedule_is_opt_in_serial_and_never_catches_up() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let initial = peer.api("api/schedule", None, &mut host).await.unwrap();
+    assert_eq!(initial["enabled"], false);
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    peer.api("api/schedule", Some(schedule_input()), &mut host)
+        .await
+        .unwrap();
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 1);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 2);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 2);
+    assert_eq!(host.executions[0]["account_id"], "account-a");
+    assert_eq!(host.executions[1]["account_id"], "account-b");
+    assert_eq!(host.bodies[0]["max_output_tokens"], 32);
+}
+#[tokio::test]
+async fn schedule_failure_pauses_until_explicit_resume() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    let mut config = schedule_input();
+    config["account_ids"] = json!(["account-a"]);
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    host.fail = true;
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
+    assert!(
+        host.state["settings"].0["accounts"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("限流")
+    );
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 1);
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 1);
+    config["resume_accounts"] = json!(["account-a"]);
+    host.fail = false;
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 2);
+}
+#[tokio::test]
+async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_account() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    peer.api("api/schedule", Some(schedule_input()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    host.state.get_mut("settings").unwrap().0["accounts"][0]["pending"] = json!("crashed");
+    drop(peer);
+    let mut peer = Peer::new().await;
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
+    host.account_patch = Some(json!({"enabled":false}));
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    assert_eq!(host.state["settings"].0["accounts"][1]["status"], "paused");
 }

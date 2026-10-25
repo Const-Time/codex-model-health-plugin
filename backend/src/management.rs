@@ -22,6 +22,8 @@ pub fn registration() -> ManagementRegistration {
             ("POST", "api/runs/start"),
             ("POST", "api/runs/step"),
             ("POST", "api/runs/control"),
+            ("GET", "api/schedule"),
+            ("POST", "api/schedule"),
         ]
         .into_iter()
         .map(|(method, path)| ManagementRoute {
@@ -59,6 +61,7 @@ struct Start {
     #[serde(default)]
     method: Method,
     account_id: String,
+    #[serde(default)]
     key_id: String,
     request_model: String,
     claimed_model: String,
@@ -214,6 +217,14 @@ async fn dispatch(
         return Err(invalid("管理请求大小或查询参数不符合接口"));
     }
     match (call.request.method.as_str(), call.request.path.as_str()) {
+        ("GET", "api/schedule") => reply(
+            serde_json::to_value(crate::schedule::read(&call.host).await?.0)
+                .map_err(|_| invalid("计划编码失败"))?,
+        ),
+        ("POST", "api/schedule") => reply(
+            serde_json::to_value(crate::schedule::save(service, &call.host, input(&call)?).await?)
+                .map_err(|_| invalid("计划编码失败"))?,
+        ),
         ("GET", "api/bootstrap") => {
             let catalog = service.engine.query(json!({"op":"catalog"})).await?;
             let accounts = host::accounts(&call.host)
@@ -224,7 +235,7 @@ async fn dispatch(
                 })
                 .collect::<Vec<_>>();
             reply(
-                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":host::keys(&call.host).await?}),
+                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":[],"account_probe":true}),
             )
         }
         ("POST", "api/upstreams/check") => {
@@ -279,17 +290,29 @@ async fn start(
         .into_iter()
         .find(|a| a.account_id == query.account_id)
         .ok_or_else(|| invalid("请选择已启用的 OpenAI 账号"))?;
-    let key = host::keys(host)
-        .await?
-        .into_iter()
-        .find(|k| k.id == query.key_id)
-        .ok_or_else(|| invalid("请选择已启用的测试 Key"))?;
-    if !host::models(host, &query.key_id)
-        .await?
-        .models
-        .contains(&query.request_model)
+    // Keep already-open older pages and historical runs on their original billing authority.
+    let legacy_key = if query.key_id.is_empty() {
+        None
+    } else {
+        let key = host::keys(host)
+            .await?
+            .into_iter()
+            .find(|k| k.id == query.key_id)
+            .ok_or_else(|| invalid("原检测 Key 已不可用"))?;
+        if !host::models(host, &query.key_id)
+            .await?
+            .models
+            .contains(&query.request_model)
+        {
+            return Err(invalid("原检测 Key 不支持所选模型"));
+        }
+        Some(key)
+    };
+    if query.request_model.is_empty()
+        || query.request_model.len() > 128
+        || query.request_model.chars().any(char::is_control)
     {
-        return Err(invalid("当前 Key 的模型列表不包含所选模型"));
+        return Err(invalid("请求模型无效"));
     }
     let plan=service.engine.query(json!({"op":"prepare","method":query.method,"tier":query.tier,"claimed_model":query.claimed_model,"request_model":query.request_model})).await?;
     let _lock = service.state.lock().await;
@@ -318,8 +341,10 @@ async fn start(
         account_name: account_name_for_display(account.email.as_deref(), &account.name),
         credential_revision: account.credential_revision,
         account_identity: Some(account_identity),
-        key_id: key.id,
-        key_name: key.name,
+        key_id: legacy_key
+            .as_ref()
+            .map_or_else(String::new, |key| key.id.clone()),
+        key_name: legacy_key.map_or_else(|| "管理员账号检测".into(), |key| key.name),
         plan,
         status: Status::Ready,
         attempts: vec![],

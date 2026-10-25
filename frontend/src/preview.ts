@@ -26,6 +26,7 @@ export function installPreview() {
   document.body.style.padding='24px'
   const runs: Run[] = params.get('scenario') === 'empty' ? [] : [example('0-1')]
   const active = new Set<string>()
+  let schedule = { enabled:false, model:'', interval_minutes:360, accounts:[] as {account_id:string;name:string;next_at:number;status:string;checked_at:null;message:string;pending:null}[] }
   async function drive(run: Run) {
     if (active.has(run.id)) return
     active.add(run.id)
@@ -51,6 +52,10 @@ export function installPreview() {
       return respond({check:{method:source.method,status,checked_at:Date.now(),latest_commit:latest,ahead_by:status==='ahead'||status==='diverged'?2:0,behind_by:status==='behind'||status==='diverged'?1:0,compare_url:`${source.url}/compare/${source.bundled_commit}...${latest}`}})
     }
     if (input.path === 'api/models') return respond({models:['gpt-6-astra','gpt-5.6-sol']})
+    if (input.path === 'api/schedule') {
+      if (input.body) schedule = {enabled:data.enabled,model:data.model,interval_minutes:data.interval_minutes,accounts:data.account_ids.map((id:string)=>({account_id:id,name:previewAccounts.find(a=>a.id===id)?.email || id,next_at:Date.now()+data.interval_minutes*60000,status:'waiting',checked_at:null,message:'',pending:null}))}
+      return respond(schedule)
+    }
     if (input.path === 'api/runs') return respond({runs:runs.map(summary)})
     if (input.path === 'api/runs/start') {
       const selected = methods.methods.find(m=>m.method===data.method)!

@@ -26,8 +26,8 @@ jobs:
       - name: Toolchain
         run: |
           npm install --global pnpm@10.10.0
-          rustup toolchain install 1.97.0 --profile minimal --component rustfmt,clippy
-          rustup default 1.97.0
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.99.1
       - name: Version and source checks
         run: |
           python3 scripts/check-release.py
@@ -38,7 +38,7 @@ jobs:
       - name: Install pinned packaging CLI
         run: |
           cargo install --git https://github.com/zyycn/codex-proxy-rs.git \
-            --rev a0e708071a5c032075be81bb42a0cd5292f386a7 \
+            --rev b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164 \
             --locked --root .tools/cpr-cli codex-proxy-plugin-cli
       - name: Build and offline acceptance tests
         env:

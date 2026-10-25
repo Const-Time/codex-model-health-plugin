@@ -112,15 +112,21 @@ pub fn account_identity(account: &AuthRuntimeAccount) -> AccountIdentity {
     }
 }
 
-pub async fn validate_account(host: &HostClient, run: &mut Run) -> Result<(), PluginFault> {
-    let account: AuthRuntimeAccount = payload(
+pub async fn runtime_account(
+    host: &HostClient,
+    id: &str,
+) -> Result<AuthRuntimeAccount, PluginFault> {
+    payload(
         host,
         "host.auth.get_runtime",
         AuthGetRequest {
-            account_id: run.account_id.clone(),
+            account_id: id.into(),
         },
     )
-    .await?;
+    .await
+}
+pub async fn validate_account(host: &HostClient, run: &mut Run) -> Result<(), PluginFault> {
+    let account = runtime_account(host, &run.account_id).await?;
     if !account.enabled || account.provider_id != "openai" || account.account_id != run.account_id {
         return Err(invalid(
             "检测账号已停用或所属账号/平台发生变化，请检查账号状态",
@@ -212,6 +218,25 @@ pub async fn execute(
     run: &Run,
     body: Value,
 ) -> Result<(String, String), ExecutionFailure> {
+    if run.key_id.is_empty() {
+        let result: Value = host
+            .call(
+                "host.account.probe",
+                json!({"account_id":run.account_id,"model":run.plan["request_model"]}),
+                serde_json::to_vec(&body).map_err(|_| invalid("检测请求编码失败"))?,
+            )
+            .await
+            .map_err(|e| e.into_plugin_fault())?
+            .result;
+        let text = result["text"]
+            .as_str()
+            .ok_or_else(|| invalid("账号检测结果格式错误"))?;
+        if result["complete"] != true || text.is_empty() {
+            return Err(invalid("账号返回了截断、拒答或空回答，本次不计为有效样本").into());
+        }
+        let response = json!({"type":"response.completed","response":{"id":"account-diagnostic","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":text}]}]}});
+        return Ok((String::new(), format!("data: {response}\n\n")));
+    }
     let request = ModelExecuteRequest {
         client_key_id: Some(run.key_id.clone()),
         model: run.plan["request_model"]
@@ -296,7 +321,10 @@ async fn read_stream(host: &HostClient, stream: &str) -> Result<String, PluginFa
                 return Err(invalid("模型返回了不匹配的协议"));
             }
             match wire.payload {
-                WirePayload::Json { data, .. } => {
+                WirePayload::Json { data, .. }
+                | WirePayload::WebSocket {
+                    data: Some(data), ..
+                } => {
                     sse.push_str("data: ");
                     sse.push_str(&data.to_string());
                     sse.push_str("\n\n");

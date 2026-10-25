@@ -1,6 +1,6 @@
 # 账号模型体检 · Codex Proxy 插件
 
-为 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 提供独立的账号模型体检页面：选择已有账号与计量 Key，通过原生代理和请求链路运行 **Meow / ModelTrace** 两种行为指纹检测，无需再次填写 API 地址或密钥；后台检测需要配套宿主支持。
+为 [Codex Proxy RS](https://github.com/zyycn/codex-proxy-rs) 提供独立的账号模型体检页面：选择已有账号，通过管理员诊断链路运行 **Meow / ModelTrace** 两种行为指纹检测，无需再次填写 API 地址或密钥；后台检测需要配套宿主支持。
 
 [查看发布包](https://github.com/Const-Time/codex-model-health-plugin/releases) · [反馈问题](https://github.com/Const-Time/codex-model-health-plugin/issues) · [插件使用规范](https://github.com/zyycn/codex-proxy-rs/blob/main/docs/plugins.md)
 
@@ -17,7 +17,7 @@
 | [Meow LLM Detector — chen-006](https://github.com/chen-006/meow-llm-detector) | 题目、响应解析、答案归一化与行为概率评分；引擎 4.5.4 / 基线 4.5.3-predictive.2；[提交 0f31d4a](https://github.com/chen-006/meow-llm-detector/tree/0f31d4a96c9e953277ab8e337d3dbd3ec57b316e) | [PolyForm Noncommercial 1.0.0](vendor/meow/LICENSE) |
 | [ModelTrace — xqy2006](https://github.com/xqy2006/ModelTrace) | 原始指纹算法与统一候选库；[提交 d4131b3](https://github.com/xqy2006/ModelTrace/tree/d4131b30243dfa05e70180b5eedde742103f1d73) | [MIT](vendor/modeltrace/LICENSE) |
 
-宿主集成使用 [Codex Proxy 公开 SDK](https://github.com/zyycn/codex-proxy-rs/tree/fef52b3717019513108733549508377a309f129d/backend/crates/gateway-plugin/sdk)、[@codex-proxy/ui](https://github.com/zyycn/codex-proxy-ui) v0.3.2，并参考 [官方插件示例与规范](https://github.com/zyycn/codex-proxy-plugins)。
+宿主集成使用 [Codex Proxy 公开 SDK](https://github.com/zyycn/codex-proxy-rs/tree/b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164/backend/crates/gateway-plugin/sdk)、[@codex-proxy/ui](https://github.com/zyycn/codex-proxy-ui) v0.3.2，并参考 [官方插件示例与规范](https://github.com/zyycn/codex-proxy-plugins)。
 
 完整集成包按 [PolyForm Noncommercial 1.0.0](LICENSE) 分发，包含非商业用途条件；ModelTrace 等第三方文件仍保留各自的许可证。本仓库是源码公开项目，不将整个包宣称为 MIT 或无商业用途限制。原始版权声明、第三方组件声明与依赖许可证见 [NOTICE](NOTICE)，安装包中也附带相关文件。
 
@@ -25,26 +25,27 @@
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 插件 ID / 版本 | `local.model-health` / `0.4.0` |
-| 宿主清单范围 | `>=3.13.0, <4.0.0`；**还必须支持后台续调 v1**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
+| 插件 ID / 版本 | `local.model-health` / `0.6.0` |
+| 进程协议 | RPC v5；必须与本次升级后的宿主配套，旧 3.13.0 的 RPC v4 不能运行此制品 |
+| 宿主清单范围 | `>=3.14.0, <4.0.0`；**还必须支持后台续调 v1 和 `host.account.probe` 管理员诊断扩展**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
 | 运行方式 | `trustedProcess`，插件以宿主系统身份运行，安装代表完整信任；不是操作系统沙箱 |
-| 扩展能力 | 独立管理页面；不注册请求中间件、调度器、观察器或自动维护任务 |
+| 扩展能力 | 独立管理页面和 maintenance v1 定时检查；不注册请求中间件、调度器或观察器 |
 
 在 **插件管理 → 安装插件 → GitHub** 中填写：
 
 ```text
 仓库：Const-Time/codex-model-health-plugin
-版本标签：v0.4.0（或留空查询最新稳定版）
+版本标签：v0.6.0（或留空查询最新稳定版）
 ```
 
-选择 `local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
+选择 `local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
 
 Release 同时提供同名 `.tar.gz.sha256`；下载两个附件后可校验：
 
 ```sh
-sha256sum -c local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-# macOS：shasum -a 256 -c local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS：shasum -a 256 -c local.model-health-0.6.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。本 fork 维护者为 [Const-Time](https://github.com/Const-Time)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
@@ -52,9 +53,9 @@ sha256sum -c local.model-health-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 ## 使用
 
 1. 按上述方式安装并启用插件。
-2. 打开「账号模型体检」，选择已启用的 OpenAI 账号和已有 Key 的名称。账号优先显示去除首尾空白后的邮箱；没有邮箱时显示账号名称。新建检测保存该显示名称，旧历史仍保留检测当时的名称；请求绑定始终使用账号 ID。
-3. 选择该 Key 可见的请求模型及检测方法。Meow 选择对照模型和 36 / 72 / 108 题档位；ModelTrace 使用统一候选库，固定 3 轮数字选择。切换方法保留账号、Key 和请求模型。
-4. 点击「开始检测」。宿主按所选 Key 计量；每次只执行一个请求。所选 Key 的分组/模型权限仍由主服务校验。
+2. 打开「账号模型体检」，选择已启用的 OpenAI 账号，无需选择 Key。账号优先显示去除首尾空白后的邮箱；没有邮箱时显示账号名称。新建检测保存该显示名称，旧历史仍保留检测当时的名称；请求绑定始终使用账号 ID。
+3. 填写账号支持的请求模型并选择检测方法。Meow 选择对照模型和 36 / 72 / 108 题档位；ModelTrace 使用统一候选库，固定 3 轮数字选择。切换方法保留账号和请求模型。
+4. 点击「开始检测」。每次只执行一个请求。新检测由管理员诊断通道发送，消耗账号真实上游额度，不扣用户 Key 额度；旧的有 Key 历史任务继续按原 Key 权限与计费执行。
 5. 失败会暂停；点「继续检测」才会继续。每档最多追加 50% 重试预算。离开菜单、隐藏页面或关闭浏览器后由宿主后台串行发送后续题目。宿主重启、插件停用或升级后不自动续发；重新打开并手动继续，未确认结果按一次未知尝试计入预算。
 6. 从历史打开报告或续测。仅在 16 个槽位满后替换最早的已结束记录，不覆盖未结束任务。
 
@@ -74,7 +75,7 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 
 ### 模型检测
 
-- 使用 `host.auth.list/get_runtime` 的非秘密账号资料、`host.keys.list` 和 `host.models.list`；页面只提交账号 ID 与 Key ID，不读取原始凭据。
+- 使用 `host.auth.list/get_runtime` 的非秘密账号资料及 `host.account.probe`，新任务不读取 Key 列表或原始凭据；旧任务仍使用原 Key 模型调用。
 - 每个 `host.model.execute_stream` 都显式指定 `account_id`、`client_key_id`、`provider=openai` 和 `protocol=openai`。主服务负责代理、鉴权、配额与最终计量；插件不搭建另一套 HTTP 出口。
 - 完整保留 Meow 的题目、参数、SSE 解析、答案归一化和概率评分。原源码放在 `vendor/meow`，文件哈希没有改变。Meow 版本 4.5.4；基线内容哈希冻结在每次任务中。
 - ModelTrace 的原始 `fingerprint.py` 和统一候选库固定在上游提交 `d4131b30243dfa05e70180b5eedde742103f1d73`，来源及逐文件哈希见 `vendor/modeltrace/SOURCE.json`。复用原始随机题目生成、数字解析、Hellinger / 有序数字块融合、温度校准和家族聚合，不引入原项目的网络服务或 API Key 表单。
@@ -82,7 +83,7 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 - `ready → running → ready/paused/completed`；显式停止转 `stopped`。发送前先写 pending，异常中断后按一次未知结果计入预算。首轮所有题优先于重试；成功样本不重复计数。
 - 全局推理并发为 1；网络等待时释放状态锁。用户暂停/结束保留当前题的结果；页面只轮询状态，不发送检测题目。每题发送前及续测时核对账号 ID、平台、启用状态和冻结的上游身份；Cookie 回写、令牌刷新导致的凭据版本变化不视作换号，认证类型或上游身份变化则中止续测。
 - 缺少稳定上游身份的账号，在已有样本且凭据更新时要求新建检测。旧检测没有身份快照时，只有尚无样本或凭据版本未变才会补存当前身份；其他旧检测保留历史，结束后新建一次即可使用稳定身份校验。
-- 状态只写插件私有 `runs` 命名空间，16 槽位，CAS 更新；不改主服务数据库结构、不安装观察器/中间件/维护钩子。
+- 状态写插件私有 `runs`（16 槽位）与 `schedule`（1 条计划）命名空间，CAS 更新；不改主服务数据库结构。maintenance v1 只检查到期计划，默认关闭。
 - 样本保留请求 ID、用量、错误与最多 256 字节回答摘录。Meow 保存归一化类别；ModelTrace 保存完整有序数字（最多 4096 个，超出则明确报错），用原评分器的有效长度判定剔除短答。评分不使用展示摘录，展示截短会标明。
 - 历史报告保留检测方法、基线版本和内容哈希，不因表单切换或后续基线更新重新计算。缺少方法字段的旧记录按 Meow 读取和续测，不改变原来的账号身份校验。
 - 主服务的模型映射、提示词或中间件可能影响实际响应，因此报告描述的是当前配置链路的行为，不把它解释成纯模型能力证明。
@@ -90,11 +91,11 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 
 ## 构建与验证
 
-构建工具：Docker Buildx、Node 24+、pnpm 10.10、Python 3.9+（安装包冒烟测试）、Rust 1.97（构建打包 CLI）。SDK 与 CLI 固定为同一个宿主提交 `fef52b3717019513108733549508377a309f129d`，前端依赖锁定在 `frontend/pnpm-lock.yaml`；不要直接换成浮动 `main`。在仓库根目录执行：
+构建工具：Docker Buildx、Node 24+、pnpm 10.10、Python 3.9+（安装包冒烟测试）、Rust 1.99.1（构建打包 CLI）。SDK 与 CLI 固定为同一个宿主提交 `b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164`，前端依赖锁定在 `frontend/pnpm-lock.yaml`；不要直接换成浮动 `main`。在仓库根目录执行：
 
 ```sh
 cargo install --git https://github.com/zyycn/codex-proxy-rs.git \
-  --rev fef52b3717019513108733549508377a309f129d \
+  --rev b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164 \
   --locked --root .tools/cpr-cli codex-proxy-plugin-cli
 CPR_PLUGIN_BIN="$PWD/.tools/cpr-cli/bin/cpr-plugin" ./scripts/build-linux.sh
 pnpm --dir frontend install --frozen-lockfile
@@ -120,7 +121,7 @@ pnpm --dir frontend build
 
 ```text
 继续开发 codex-model-health-plugin。先读 README.md、plugin.json、engine/worker.py、backend/src 和现有协议测试。
-沿用 @codex-proxy/ui 与当前管理桥；保持 Meow / ModelTrace 原源码不变、方法与基线冻结、旧 Meow 记录兼容、账号/Key 显式绑定、预算保守计数、错误不参与评分。
+沿用 @codex-proxy/ui 与当前管理桥；保持 Meow / ModelTrace 原源码不变、方法与基线冻结、旧 Meow 记录兼容、账号显式绑定（旧任务保留 Key 绑定）、预算保守计数、错误不参与评分。
 只改所请求的功能；补充离线协议测试和真实浏览器交互检查；不要自动部署或执行付费检测。
 ```
 
@@ -136,4 +137,14 @@ Actions 使用固定 SHA 的 [GitHub 官方 checkout](https://github.com/actions
 
 ## RPC v4 升级
 
-v0.4.0 使用上游 `a0e70807` SDK / CLI 和 management v2，配套本地宿主 3.13.0。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；runs 状态 schema 仍为 1，历史和冻结计划继续读取。
+v0.6.0 使用上游 `b8479b59` SDK、RPC v5、management v2 和 maintenance v1，须搭配本次新增 `host.account.probe` 的 Const-Time 宿主；最低宿主版本为 3.14.0。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；runs 状态 schema 仍为 1，历史和冻结计划继续读取。
+
+## 定时账号探测
+
+默认关闭，只对手动选中的最多 50 个账号发送短请求。填写所有所选账号支持的模型，设置 60–10080 分钟间隔（默认 360 分钟），保存后从一个间隔后开始。关闭浏览器不影响计划；关闭计划、停用插件或停止宿主后不再开始新请求，已发送请求可能已经消耗上游额度。
+
+每轮宿主维护最多执行一个账号，和手动检测共享串行锁；每次短请求请求 32 输出 token、最多等待 20 秒，不补发错过的周期。Codex OAuth 后端不支持输出 token 参数，沿用宿主适配移除该字段，依靠串行、超时和取消限制资源占用。失败、空回复、截断或重启后结果未知时暂停对应账号，核对后勾选恢复并保存。暂停账号不会因普通保存或重新开启总开关而自动恢复。
+
+成功调用可能触发上游额度窗口计时，具体取决于平台；成功不证明没有风控。401 表示鉴权问题，403 可能涉及权限、区域或风控，429 可能限流或额度不足，均不直接当作封禁。
+
+免 Key 诊断是本 fork 的宿主扩展，不是上游 RPC v5 的标准能力；需要成对升级宿主和插件。手动诊断请求的输出上限为 4096 token（仅适用于支持该参数的上游），最多等待 90 秒，以容纳 ModelTrace 的完整数字回答。
