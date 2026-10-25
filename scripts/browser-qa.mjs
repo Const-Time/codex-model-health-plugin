@@ -15,11 +15,11 @@ const base=process.env.PREVIEW_URL || 'http://127.0.0.1:4175/'
 async function shot(name){await page.waitForTimeout(300);await page.screenshot({path:`${root}/review/screenshots/${name}.png`,fullPage:true,animations:'disabled'})}
 async function select(label, option){const trigger=page.getByRole('combobox',{name:label,exact:true});await trigger.click();const controls=await trigger.getAttribute('aria-controls');await page.locator(`[id="${controls}"]`).getByRole('option',{name:option,exact:true}).click()}
 async function configureTrace(account = 'primary@example.com') {
-  await page.getByRole('radio',{name:'ModelTrace',exact:true}).click()
+  await page.getByRole('radiogroup',{name:'检测方法',exact:true}).getByRole('radio',{name:'ModelTrace',exact:true}).click()
   await select('检测账号',account)
   await select('请求模型','gpt-6-astra')
-  await page.getByRole('radio',{name:'Meow',exact:true}).click()
-  await page.getByRole('radio',{name:'ModelTrace',exact:true}).focus()
+  await page.getByRole('radiogroup',{name:'检测方法',exact:true}).getByRole('radio',{name:'Meow',exact:true}).click()
+  await page.getByRole('radiogroup',{name:'检测方法',exact:true}).getByRole('radio',{name:'ModelTrace',exact:true}).focus()
   await page.keyboard.press('Space')
   assert.equal((await page.getByRole('combobox',{name:'检测账号',exact:true}).textContent()).trim(),account)
   assert.equal(await page.getByRole('combobox',{name:'计量 Key',exact:true}).count(),0)
@@ -88,7 +88,7 @@ try {
   await page.getByRole('button',{name:'当前题完成后暂停',exact:true}).waitFor({state:'hidden'})
   await page.getByText('当前题目正在请求中；结束或暂停会保留本题的用量与结果。',{exact:true}).waitFor({state:'hidden'})
   await shot('modeltrace-light-report')
-  await page.getByRole('radio',{name:'Meow',exact:true}).click()
+  await page.getByRole('radiogroup',{name:'检测方法',exact:true}).getByRole('radio',{name:'Meow',exact:true}).click()
   await page.getByText('前 5 候选 · 库内相对概率',{exact:false}).waitFor()
   assert.equal(await page.getByText('判定阈值',{exact:false}).count(),0,'changing new-task form must not change active report method')
   await page.getByRole('button',{name:'查看 主账号 A · 固定代理 的检测报告',exact:true}).last().click()

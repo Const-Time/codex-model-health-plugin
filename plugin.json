@@ -3,11 +3,11 @@
   "name": "model-health",
   "displayName": "账号模型体检",
   "publisher": "local",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "选择已有账号，使用 Meow 或 ModelTrace 检测模型行为指纹；独立插件，不改写账号或主服务",
   "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
-    "codex-proxy-rs": ">=3.14.0, <4.0.0"
+    "codex-proxy-rs": ">=3.14.2, <4.0.0"
   },
   "main": "bin/plugin",
   "runtime": "trustedProcess",
@@ -31,7 +31,7 @@
   "state": [
     {
       "namespace": "runs",
-      "schemaVersion": 1,
+      "schemaVersion": 2,
       "schema": {
         "type": "object",
         "required": [
@@ -56,7 +56,7 @@
           },
           "attempts": {
             "type": "array",
-            "maxItems": 162
+            "maxItems": 324
           },
           "status": {
             "enum": [
@@ -72,11 +72,13 @@
       "maximumRecords": 16,
       "maximumBytes": 4194304,
       "maximumValueBytes": 262144,
-      "migratesFrom": []
+      "migratesFrom": [
+        1
+      ]
     },
     {
       "namespace": "schedule",
-      "schemaVersion": 2,
+      "schemaVersion": 3,
       "schema": {
         "type": "object",
         "required": [
@@ -84,7 +86,9 @@
           "model",
           "interval_minutes",
           "accounts",
-          "timing"
+          "timing",
+          "detection",
+          "active_account"
         ],
         "properties": {
           "enabled": {
@@ -133,6 +137,38 @@
               "daily_time",
               "cron"
             ]
+          },
+          "detection": {
+            "type": "object",
+            "required": [
+              "method",
+              "tier",
+              "claimed_model"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "claimed_model": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "tier": {
+                "maxLength": 16,
+                "type": "string"
+              },
+              "method": {
+                "enum": [
+                  "short",
+                  "meow",
+                  "modeltrace"
+                ]
+              }
+            }
+          },
+          "active_account": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -140,7 +176,8 @@
       "maximumBytes": 131072,
       "maximumValueBytes": 65536,
       "migratesFrom": [
-        1
+        1,
+        2
       ]
     }
   ]

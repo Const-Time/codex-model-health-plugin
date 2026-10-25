@@ -38,6 +38,10 @@ pub struct Run {
     pub attempts: Vec<Value>,
     pub inflight: Option<String>,
     pub report: Value,
+    #[serde(default)]
+    pub scheduled: bool,
+    #[serde(default)]
+    pub retry_from: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
@@ -71,6 +75,12 @@ impl Run {
             .iter()
             .filter_map(|j| j["job_id"].as_str())
             .collect();
+        if self.scheduled {
+            return ids
+                .into_iter()
+                .find(|id| !self.successful(id))
+                .map(str::to_owned);
+        }
         if let Some(id) = ids
             .iter()
             .find(|id| !self.attempts.iter().any(|a| a["job_id"] == **id))
@@ -86,6 +96,9 @@ impl Run {
             .map(str::to_owned)
     }
     pub fn reserve(&mut self, job: &str) -> Result<(), PluginFault> {
+        if self.scheduled && self.attempts.len() >= 324 {
+            return Err(invalid("定时检测已达到尝试总上限，请结束后开始新检测"));
+        }
         if self.status != Status::Ready || self.inflight.is_some() {
             return Err(invalid("任务未就绪；请刷新状态后继续"));
         }
@@ -117,7 +130,9 @@ impl Run {
         }
         self.status = if self.next_job().is_none() {
             Status::Completed
-        } else if self.attempts.last().is_some_and(|a| a["status"] == "error") {
+        } else if self.attempts.last().is_some_and(|a| a["status"] == "error")
+            && (!self.scheduled || self.current_failures() >= 3)
+        {
             Status::Paused
         } else {
             Status::Ready
@@ -129,6 +144,9 @@ impl Run {
             self.finish_attempt(json!({"status":"error","error":"interrupted_unknown_result","answer":"","request_id":null}))?;
         }
         if !self.finished() {
+            if self.scheduled {
+                self.retry_from = self.attempts.len();
+            }
             self.status = if self.next_job().is_some() {
                 Status::Ready
             } else {
@@ -137,13 +155,23 @@ impl Run {
         }
         Ok(())
     }
+    pub fn current_failures(&self) -> usize {
+        let Some(last) = self.attempts.last().filter(|a| a["status"] == "error") else {
+            return 0;
+        };
+        self.attempts
+            .iter()
+            .skip(self.retry_from)
+            .filter(|a| a["job_id"] == last["job_id"] && a["status"] == "error")
+            .count()
+    }
     pub fn summary(&self) -> Value {
         json!({"id":self.id,"created_at":self.created_at,"updated_at":self.updated_at,
             "account_name":self.account_name,"account_id":self.account_id,"key_name":self.key_name,
             "request_model":self.plan["request_model"],"claimed_model":self.plan["claimed_model"],
             "method":self.plan.get("method").cloned().unwrap_or_else(|| json!("meow")),
             "tier":self.plan["tier"],"baseline_hash":self.plan["hash"],"status":self.status,
-            "attempts":self.attempts.len(),"planned":self.jobs().len(),"report":self.report})
+            "attempts":self.attempts.len(),"planned":self.jobs().len(),"report":self.report,"scheduled":self.scheduled})
     }
 }
 
@@ -179,7 +207,37 @@ mod tests {
             attempts: vec![],
             inflight: None,
             report: Value::Null,
+            scheduled: false,
+            retry_from: 0,
         }
+    }
+    #[test]
+    fn scheduled_retries_same_question_twice_then_requires_explicit_recovery() {
+        let mut r = run();
+        r.scheduled = true;
+        r.reserve("a").unwrap();
+        r.finish_attempt(json!({"status":"ok"})).unwrap();
+        for failure in 1..=3 {
+            assert_eq!(r.next_job().as_deref(), Some("b"));
+            r.reserve("b").unwrap();
+            r.finish_attempt(json!({"status":"error"})).unwrap();
+            assert_eq!(r.current_failures(), failure);
+            assert_eq!(
+                r.status,
+                if failure == 3 {
+                    Status::Paused
+                } else {
+                    Status::Ready
+                }
+            );
+        }
+        assert!(r.reserve("b").is_err());
+        r.recover().unwrap();
+        assert_eq!(r.current_failures(), 0);
+        r.reserve("b").unwrap();
+        r.finish_attempt(json!({"status":"ok"})).unwrap();
+        assert_eq!(r.status, Status::Completed);
+        assert_eq!(r.attempts.iter().filter(|a| a["job_id"] == "a").count(), 1);
     }
     #[test]
     fn pause_survives_completion() {

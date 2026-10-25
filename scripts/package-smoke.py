@@ -170,6 +170,9 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         if method == "host.auth.get_runtime":
             assert json.loads(payload)["account_id"] == "smoke-account"
             return {}, json.dumps(runtime_account()).encode()
+        if method == "host.account.probe.capabilities":
+            assert not payload and params == {}
+            return {"scheduled_detection": True, "maximum_output_tokens": 4096, "timeout_seconds": 90}, b""
         if method == "host.account.probe":
             assert params["account_id"] == "smoke-account"
             assert params["model"] == "gpt-6-astra"
@@ -249,7 +252,8 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         assert len(meow["models"]) == 4
         assert boot["accounts"][0]["id"] == "smoke-account" and boot["keys"] == []
         assert boot["accounts"][0]["email"] == "  smoke@example.com  "
-        assert host["callbacks"] == ["host.auth.list"]
+        assert host["callbacks"] == ["host.auth.list", "host.account.probe.capabilities"]
+        assert boot["scheduled_detection_supported"] is True
         status, error = api("api/models", {})
         assert status == 400 and error["error"]["message"] == "请求参数格式错误", error
         if continuous:

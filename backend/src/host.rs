@@ -204,6 +204,11 @@ pub struct ExecutionFailure {
     pub request_id: Option<String>,
     pub fault: PluginFault,
 }
+pub async fn scheduled_detection_supported(host: &HostClient) -> bool {
+    metadata::<_, Value>(host, "host.account.probe.capabilities", json!({}))
+        .await
+        .is_ok_and(|value| value["scheduled_detection"] == true)
+}
 impl From<PluginFault> for ExecutionFailure {
     fn from(fault: PluginFault) -> Self {
         Self {
@@ -219,10 +224,14 @@ pub async fn execute(
     body: Value,
 ) -> Result<(String, String), ExecutionFailure> {
     if run.key_id.is_empty() {
+        let mut params = json!({"account_id":run.account_id,"model":run.plan["request_model"]});
+        if run.scheduled {
+            params["mode"] = json!("model_detection");
+        }
         let result: Value = host
             .call(
                 "host.account.probe",
-                json!({"account_id":run.account_id,"model":run.plan["request_model"]}),
+                params,
                 serde_json::to_vec(&body).map_err(|_| invalid("检测请求编码失败"))?,
             )
             .await

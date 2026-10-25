@@ -1,9 +1,11 @@
-//! Durable, serial, opt-in account diagnostics. Pending work is never replayed automatically.
+//! Durable, serial, opt-in account diagnostics with bounded retries and persisted progress.
 use crate::{Service, host, invalid, now_ms};
 use gateway_plugin_sdk::{PluginFault, call::host::*, client::HostClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+mod detection;
 mod timing;
+pub(crate) use detection::Detection;
 use timing::Timing;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -14,6 +16,10 @@ pub(crate) struct Schedule {
     #[serde(default)]
     pub timing: Timing,
     pub accounts: Vec<Entry>,
+    #[serde(default)]
+    pub detection: Detection,
+    #[serde(default)]
+    pub active_account: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -24,6 +30,10 @@ pub(crate) struct Entry {
     pub checked_at: Option<u64>,
     pub message: String,
     pub pending: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub failures: u8,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +43,8 @@ pub(crate) struct Configure {
     interval_minutes: u64,
     #[serde(default)]
     timing: Timing,
+    #[serde(default)]
+    detection: Detection,
     account_ids: Vec<String>,
     #[serde(default)]
     resume_accounts: Vec<String>,
@@ -56,9 +68,18 @@ pub(crate) fn preview(input: Preview) -> Result<serde_json::Value, PluginFault> 
 }
 
 pub(crate) fn migrate(input: StateMigrationRequest) -> Result<StateMigrationResult, PluginFault> {
+    if input.namespace == "runs" && input.from_schema_version == 1 && input.to_schema_version == 2 {
+        return Ok(StateMigrationResult {
+            changes: input
+                .records
+                .into_iter()
+                .map(|record| StateMigrationChange::Keep { key: record.key })
+                .collect(),
+        });
+    }
     if input.namespace != "schedule"
-        || input.from_schema_version != 1
-        || input.to_schema_version != 2
+        || ![1, 2].contains(&input.from_schema_version)
+        || input.to_schema_version != 3
     {
         return Err(invalid("不支持此计划状态迁移"));
     }
@@ -72,8 +93,13 @@ pub(crate) fn migrate(input: StateMigrationRequest) -> Result<StateMigrationResu
             return Err(invalid("旧计划状态无效"));
         }
         // Preserve every account's pending marker, status, due time and diagnostic history.
-        value["timing"] =
-            serde_json::to_value(Timing::default()).map_err(|_| invalid("计划编码失败"))?;
+        if input.from_schema_version == 1 {
+            value["timing"] =
+                serde_json::to_value(Timing::default()).map_err(|_| invalid("计划编码失败"))?;
+        }
+        value["detection"] =
+            serde_json::to_value(Detection::default()).map_err(|_| invalid("计划编码失败"))?;
+        value["active_account"] = serde_json::Value::Null;
         let _: Schedule =
             serde_json::from_value(value.clone()).map_err(|_| invalid("旧计划状态无效"))?;
         changes.push(StateMigrationChange::Replace {
@@ -101,6 +127,7 @@ pub(crate) async fn read(host: &HostClient) -> Result<(Schedule, Option<u64>), P
         None => Ok((
             Schedule {
                 interval_minutes: 360,
+                detection: Detection::new_detection(),
                 ..Schedule::default()
             },
             None,
@@ -144,6 +171,10 @@ pub(crate) async fn save(
         .timing
         .prepare(input.interval_minutes)?
         .next_after(now_ms())?;
+    input
+        .detection
+        .validate(service, host, &input.model, input.enabled)
+        .await?;
     let available = if input.enabled {
         host::accounts(host).await?
     } else {
@@ -151,6 +182,24 @@ pub(crate) async fn save(
     };
     let _lock = service.state.lock().await;
     let (old, version) = read(host).await?;
+    if old.active_account.is_some()
+        && input.enabled
+        && (old.detection != input.detection || old.model != input.model.trim())
+    {
+        return Err(invalid(
+            "已有定时检测正在进行，请先关闭计划再修改模型或检测方法",
+        ));
+    }
+    if old
+        .active_account
+        .as_ref()
+        .is_some_and(|id| !input.account_ids.contains(id))
+    {
+        return Err(invalid("请先关闭计划并保存，再移除正在检测的账号"));
+    }
+    if !input.enabled {
+        detection::pause_active(service, host, &old).await?;
+    }
     if old
         .accounts
         .iter()
@@ -181,19 +230,31 @@ pub(crate) async fn save(
                 checked_at: None,
                 message: String::new(),
                 pending: None,
+                run_id: None,
+                failures: 0,
             });
         if input.resume_accounts.contains(&id)
             || !old.enabled
             || old.interval_minutes != input.interval_minutes
             || old.timing != input.timing
+            || old.detection != input.detection
             || old.model != input.model.trim()
         {
             entry.next_at = next_at;
             // Only explicit resume clears a failed account.
-            if entry.pending.is_none() && input.resume_accounts.contains(&id) {
+            if entry.status == "paused"
+                && entry.pending.is_none()
+                && input.resume_accounts.contains(&id)
+            {
                 entry.status = "waiting".into();
                 entry.message.clear();
+                entry.failures = 0;
             }
+        }
+        if !input.enabled && old.active_account.as_ref() == Some(&id) {
+            entry.status = "paused".into();
+            entry.pending = None;
+            entry.message = "计划已关闭，本轮进度已保留；勾选恢复后继续".into();
         }
         accounts.push(entry);
     }
@@ -203,6 +264,12 @@ pub(crate) async fn save(
         interval_minutes: input.interval_minutes,
         timing: input.timing,
         accounts,
+        detection: input.detection,
+        active_account: if input.enabled {
+            old.active_account
+        } else {
+            None
+        },
     };
     write(host, &plan, version).await?;
     Ok(plan)
@@ -211,6 +278,9 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
     let Ok(_execution) = service.execution.try_acquire() else {
         return Ok(());
     };
+    if read(host).await?.0.detection.is_full() {
+        return detection::tick_reserved(service, host).await;
+    }
     let (id, operation, model) = {
         let _lock = service.state.lock().await;
         let (mut plan, version) = read(host).await?;
@@ -294,16 +364,38 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
                     .is_some_and(|s| !s.trim().is_empty()) =>
         {
             entry.status = "ok".into();
+            entry.failures = 0;
             entry.message = "短请求成功；未发现明确错误，额度窗口以平台返回为准".into();
         }
         Ok(_) => {
-            entry.status = "paused".into();
+            entry.failures = entry.failures.saturating_add(1);
+            entry.status = if entry.failures < 3 {
+                "waiting"
+            } else {
+                "paused"
+            }
+            .into();
+            if entry.failures < 3 {
+                entry.next_at = now_ms() + 30_000;
+            }
             entry.message = "收到空回答或截断结果，已暂停；不能据此判断风控".into();
         }
         Err(error) => {
-            entry.status = "paused".into();
+            entry.failures = entry.failures.saturating_add(1);
+            entry.status = if entry.failures < 3 {
+                "waiting"
+            } else {
+                "paused"
+            }
+            .into();
+            if entry.failures < 3 {
+                entry.next_at = now_ms() + 30_000;
+            }
             entry.message = classify(&error).into();
         }
+    }
+    if entry.failures > 0 && entry.failures < 3 {
+        entry.message = format!("短探测失败 {}/3，下轮重试", entry.failures);
     }
     write(host, &plan, version).await
 }
@@ -321,5 +413,29 @@ fn classify(error: &PluginFault) -> &'static str {
         Some(429) => "上游限流或额度不足，已暂停；不能据此判断封禁",
         Some(500..=599) => "上游服务异常，已暂停；不能据此判断风控",
         _ => "检测失败或超时，已暂停；不能据此判断风控",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calendar_migration_keeps_timing_and_does_not_enable_full_detection() {
+        let legacy = json!({"enabled":true,"model":"gpt-6-astra","interval_minutes":360,"timing":{"mode":"cron","cron":"0 9 * * *","daily_time":"09:00","timezone":"Asia/Shanghai"},"accounts":[{"account_id":"a","name":"a","next_at":123,"status":"paused","checked_at":null,"message":"old","pending":"uncertain"}]});
+        let request = serde_json::from_value(json!({"namespace":"schedule","from_schema_version":2,"to_schema_version":3,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap();
+        let result = serde_json::to_value(migrate(request).unwrap()).unwrap();
+        let value = &result["changes"][0]["value"];
+        assert_eq!(value["timing"], legacy["timing"]);
+        assert_eq!(value["accounts"], legacy["accounts"]);
+        assert_eq!(value["detection"]["method"], "short");
+        assert!(value["active_account"].is_null());
+    }
+
+    #[test]
+    fn run_migration_keeps_frozen_historical_records() {
+        let request = serde_json::from_value(json!({"namespace":"runs","from_schema_version":1,"to_schema_version":2,"records":[{"key":"0","version":7,"value":{"id":"0-1","plan":{"frozen":true}}}]})).unwrap();
+        let result = serde_json::to_value(migrate(request).unwrap()).unwrap();
+        assert_eq!(result["changes"], json!([{"key":"0","action":"keep"}]));
     }
 }

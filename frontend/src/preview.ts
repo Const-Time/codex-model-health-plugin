@@ -26,7 +26,7 @@ export function installPreview() {
   document.body.style.padding='24px'
   const runs: Run[] = params.get('scenario') === 'empty' ? [] : [example('0-1')]
   const active = new Set<string>()
-  let schedule = { enabled:false, model:'', interval_minutes:360, timing:{mode:'interval',daily_time:'09:00',cron:'0 9 * * *',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone}, accounts:[] as {account_id:string;name:string;next_at:number;status:string;checked_at:null;message:string;pending:null}[] }
+  let schedule = { detection:{method:"short",tier:"low",claimed_model:""}, enabled:false, model:'', interval_minutes:360, timing:{mode:'interval',daily_time:'09:00',cron:'0 9 * * *',timezone:Intl.DateTimeFormat().resolvedOptions().timeZone}, accounts:[] as {account_id:string;name:string;next_at:number;status:string;checked_at:null;message:string;pending:null}[] }
   // Development fixture only. Production previews use the Rust scheduler, including DST rules.
   function scheduleDates(timing: typeof schedule.timing, interval: number) {
     if (timing.mode === 'interval') return [1,2,3].map(i => Date.now()+i*interval*60000)
@@ -56,7 +56,7 @@ export function installPreview() {
     const data = input.body ? JSON.parse(input.body) : {}
     const respond=(value: unknown,status=200)=>({status,contentType:'application/json',body:new TextEncoder().encode(JSON.stringify(value)).buffer})
     if (params.get('scenario') === 'error') return respond({message:'模拟：宿主账号目录读取失败，请重试'},503)
-    if (input.path === 'api/bootstrap') return respond({background_supported:true,catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[]})
+    if (input.path === 'api/bootstrap') return respond({scheduled_detection_supported:params.get("scenario") !== "old-host",background_supported:true,catalog:methods,sources,accounts:params.get('scenario')==='empty'?[]:previewAccounts,keys:[]})
     if (input.path === 'api/upstreams/check') {
       const source = sources.find(s=>s.method===data.method)!
       const scenario = params.get('updates')
@@ -74,7 +74,7 @@ export function installPreview() {
     }
     if (input.path === 'api/schedule') {
       if (params.get('scenario') === 'schedule-error') return respond({message:'计划读取失败'},503)
-      if (input.body) schedule = {enabled:data.enabled,model:data.model,interval_minutes:data.interval_minutes,timing:data.timing || schedule.timing,accounts:data.account_ids.map((id:string)=>({account_id:id,name:previewAccounts.find(a=>a.id===id)?.email || id,next_at:scheduleDates(data.timing || schedule.timing,data.interval_minutes)[0]!,status:'waiting',checked_at:null,message:'',pending:null}))}
+      if (input.body) schedule = {detection:data.detection || schedule.detection,enabled:data.enabled,model:data.model,interval_minutes:data.interval_minutes,timing:data.timing || schedule.timing,accounts:data.account_ids.map((id:string)=>({account_id:id,name:previewAccounts.find(a=>a.id===id)?.email || id,next_at:scheduleDates(data.timing || schedule.timing,data.interval_minutes)[0]!,status:'waiting',checked_at:null,message:'',pending:null}))}
       return respond(schedule)
     }
     if (input.path === 'api/runs') return respond({runs:runs.map(summary)})

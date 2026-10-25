@@ -241,6 +241,7 @@ struct Host {
     account_patch: Option<Value>,
     repeat_cursor: bool,
     numeric_answer: bool,
+    no_scheduled_support: bool,
     callbacks: Vec<String>,
     http: VecDeque<(u16, Vec<u8>)>,
     http_body: Option<Vec<u8>>,
@@ -345,6 +346,9 @@ impl Host {
                         .unwrap(),
                 ))
             }
+            "host.account.probe.capabilities" => {
+                metadata(json!({"scheduled_detection":!self.no_scheduled_support}))
+            }
             "host.account.probe" => {
                 assert!(self.state.values().any(|(v, _)| {
                     v["inflight"].is_string()
@@ -359,7 +363,24 @@ impl Host {
                     fault.http_status = Some(429);
                     return Err(fault);
                 }
-                metadata(json!({"complete":true,"text":"3","status":"ok"}))
+                let answer = if self.numeric_answer {
+                    (0..332)
+                        .map(|i| (1 + (i * 37 + 13) % 355).to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                } else {
+                    let prompt = self.bodies.last().unwrap()["input"]
+                        .to_string()
+                        .to_lowercase();
+                    if prompt.contains("bird") {
+                        "robin".into()
+                    } else if prompt.contains("country") {
+                        "canada".into()
+                    } else {
+                        "3".into()
+                    }
+                };
+                metadata(json!({"complete":true,"text":answer,"status":"ok"}))
             }
             "host.keys.list" => {
                 let next = params["cursor"].is_null();
@@ -1303,6 +1324,238 @@ fn due(host: &mut Host) {
         entry["next_at"] = json!(0);
     }
 }
+fn detection_input(method: &str) -> Value {
+    let mut value = schedule_input();
+    value["account_ids"] = json!(["account-a"]);
+    value["detection"] = json!({"method":method,"tier":"low","claimed_model":"gpt-6-astra"});
+    value
+}
+#[tokio::test]
+async fn scheduled_meow_finishes_all_samples_and_keeps_report_after_restart() {
+    let mut peer = Peer::new().await;
+    let mut host = Host::default();
+    peer.api("api/schedule", Some(detection_input("meow")), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    for _ in 0..36 {
+        peer.reconcile(&mut host).await;
+    }
+    let id = host.state["settings"].0["accounts"][0]["run_id"].clone();
+    let result = peer
+        .api("api/runs/get", Some(json!({"id":id})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(result["run"]["status"], "completed", "{result}");
+    assert_eq!(result["run"]["report"]["valid_samples"], 36);
+    assert!(serde_json::to_vec(&result["run"]).unwrap().len() < 262144);
+    assert_eq!(host.executions.len(), 36);
+    drop(peer);
+    let mut peer = Peer::new().await;
+    peer.reconcile(&mut host).await;
+    let reopened = peer
+        .api("api/runs/get", Some(json!({"id":id})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(reopened["run"], result["run"]);
+    assert_eq!(host.executions.len(), 36);
+}
+#[tokio::test]
+async fn scheduled_interrupted_attempt_consumes_retry_before_next_request() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        fail: true,
+        ..Host::default()
+    };
+    peer.api(
+        "api/schedule",
+        Some(detection_input("modeltrace")),
+        &mut host,
+    )
+    .await
+    .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    let id = host.state["settings"].0["accounts"][0]["run_id"].clone();
+    let record = host
+        .state
+        .values_mut()
+        .find(|(v, _)| v["id"] == id)
+        .unwrap();
+    let job = record.0["plan"]["jobs"][0]["job_id"].clone();
+    record.0["status"] = json!("running");
+    record.0["inflight"] = job.clone();
+    record.0["attempts"] = json!([{"job_id":job,"status":"pending"}]);
+    drop(peer);
+    let mut peer = Peer::new().await;
+    peer.reconcile(&mut host).await;
+    assert!(
+        host.executions.is_empty(),
+        "unknown attempt is recorded before any retry"
+    );
+    for _ in 0..3 {
+        peer.reconcile(&mut host).await;
+    }
+    assert_eq!(host.executions.len(), 2);
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
+    let result = peer
+        .api("api/runs/get", Some(json!({"id":id})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(result["run"]["attempts"].as_array().unwrap().len(), 3);
+}
+#[tokio::test]
+async fn scheduled_modeltrace_completes_report_without_browser_or_key() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        numeric_answer: true,
+        ..Host::default()
+    };
+    peer.api(
+        "api/schedule",
+        Some(detection_input("modeltrace")),
+        &mut host,
+    )
+    .await
+    .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert!(host.executions.is_empty());
+    let id = host.state["settings"].0["accounts"][0]["run_id"].clone();
+    for count in 1..=3 {
+        peer.reconcile(&mut host).await;
+        assert_eq!(host.executions.len(), count);
+    }
+    let result = peer
+        .api("api/runs/get", Some(json!({"id":id})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(result["run"]["status"], "completed", "{result}");
+    assert_eq!(result["run"]["report"]["valid_samples"], 3);
+    assert_eq!(result["run"]["report"]["verdict"], "attributed");
+    assert_eq!(result["background_running"], false);
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "ok");
+    assert!(host.state["settings"].0["active_account"].is_null());
+    assert!(
+        host.executions
+            .iter()
+            .all(|e| e["mode"] == "model_detection")
+    );
+    assert!(
+        !host
+            .callbacks
+            .iter()
+            .any(|m| m.starts_with("host.keys.") || m.starts_with("host.model."))
+    );
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 3);
+}
+#[tokio::test]
+async fn scheduled_failures_retry_twice_pause_and_resume_same_question() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        numeric_answer: true,
+        ..Host::default()
+    };
+    let mut config = detection_input("modeltrace");
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    peer.reconcile(&mut host).await; // first question succeeds
+    let id = host.state["settings"].0["accounts"][0]["run_id"].clone();
+    host.fail = true;
+    for failure in 1..=3 {
+        peer.reconcile(&mut host).await;
+        assert_eq!(host.executions.len(), failure + 1);
+        assert_eq!(
+            host.state["settings"].0["accounts"][0]["status"],
+            if failure == 3 { "paused" } else { "running" }
+        );
+    }
+    assert_eq!(host.bodies[1], host.bodies[2]);
+    assert_eq!(host.bodies[2], host.bodies[3]);
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 4);
+    assert!(
+        peer.api("api/runs/step", Some(json!({"id":id})), &mut host)
+            .await
+            .is_err()
+    );
+    config["resume_accounts"] = json!(["account-a"]);
+    host.fail = false;
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    for _ in 0..3 {
+        peer.reconcile(&mut host).await;
+    }
+    assert_eq!(host.executions.len(), 6);
+    assert_eq!(host.state["settings"].0["accounts"][0]["run_id"], id);
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "ok");
+}
+#[tokio::test]
+async fn scheduled_detection_disable_preserves_progress_and_old_host_rejects_enable() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        no_scheduled_support: true,
+        numeric_answer: true,
+        ..Host::default()
+    };
+    let mut config = detection_input("modeltrace");
+    assert!(
+        peer.api("api/schedule", Some(config.clone()), &mut host)
+            .await
+            .is_err()
+    );
+    assert!(host.state.is_empty());
+    host.no_scheduled_support = false;
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    for _ in 0..2 {
+        peer.reconcile(&mut host).await;
+    }
+    let mut stale_resume = config.clone();
+    stale_resume["resume_accounts"] = json!(["account-a"]);
+    peer.api("api/schedule", Some(stale_resume), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(
+        host.state["settings"].0["accounts"][0]["status"], "running",
+        "stale UI resume cannot reset an active task"
+    );
+    let mut changed = config.clone();
+    changed["model"] = json!("other-model");
+    assert!(
+        peer.api("api/schedule", Some(changed), &mut host)
+            .await
+            .is_err()
+    );
+    config["enabled"] = json!(false);
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 1);
+    assert!(host.state["settings"].0["active_account"].is_null());
+    config["enabled"] = json!(true);
+    config["resume_accounts"] = json!(["account-a"]);
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    for _ in 0..3 {
+        peer.reconcile(&mut host).await;
+    }
+    assert_eq!(host.executions.len(), 3);
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "ok");
+}
 #[tokio::test]
 async fn schedule_is_opt_in_serial_and_never_catches_up() {
     let mut peer = Peer::new().await;
@@ -1338,7 +1591,10 @@ async fn schedule_failure_pauses_until_explicit_resume() {
         .unwrap();
     due(&mut host);
     host.fail = true;
-    peer.reconcile(&mut host).await;
+    for _ in 0..3 {
+        due(&mut host);
+        peer.reconcile(&mut host).await;
+    }
     assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
     assert!(
         host.state["settings"].0["accounts"][0]["message"]
@@ -1348,13 +1604,13 @@ async fn schedule_failure_pauses_until_explicit_resume() {
     );
     due(&mut host);
     peer.reconcile(&mut host).await;
-    assert_eq!(host.executions.len(), 1);
+    assert_eq!(host.executions.len(), 3);
     peer.api("api/schedule", Some(config.clone()), &mut host)
         .await
         .unwrap();
     due(&mut host);
     peer.reconcile(&mut host).await;
-    assert_eq!(host.executions.len(), 1);
+    assert_eq!(host.executions.len(), 3);
     config["resume_accounts"] = json!(["account-a"]);
     host.fail = false;
     peer.api("api/schedule", Some(config), &mut host)
@@ -1362,7 +1618,7 @@ async fn schedule_failure_pauses_until_explicit_resume() {
         .unwrap();
     due(&mut host);
     peer.reconcile(&mut host).await;
-    assert_eq!(host.executions.len(), 2);
+    assert_eq!(host.executions.len(), 4);
 }
 #[tokio::test]
 async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_account() {
@@ -1379,7 +1635,10 @@ async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_ac
     assert!(host.executions.is_empty());
     assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
     host.account_patch = Some(json!({"enabled":false}));
-    peer.reconcile(&mut host).await;
+    for _ in 0..3 {
+        due(&mut host);
+        peer.reconcile(&mut host).await;
+    }
     assert!(host.executions.is_empty());
     assert_eq!(host.state["settings"].0["accounts"][1]["status"], "paused");
 }
@@ -1496,7 +1755,7 @@ async fn schedule_schema_upgrade_preserves_legacy_due_times_and_uncertain_marker
     peer.send(Frame {
         message: Message::Call { id, method: "plugin.state.migrate".into(),
             context: CallContext { request:None,call_id:id,instance_id:"test".into(),generation:1,incarnation:"test".into(),stage:Stage::Configuration,timeout_ms:30000,resource_stream:false,resource_scope_id:"scope".into(),request_id:None,attempt_id:None,account_id:None,credential_revision:None }, params:json!({}) },
-        payload: serde_json::to_vec(&json!({"namespace":"schedule","from_schema_version":1,"to_schema_version":2,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap(),
+        payload: serde_json::to_vec(&json!({"namespace":"schedule","from_schema_version":1,"to_schema_version":3,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap(),
     }).await;
     let response = peer.receive().await;
     assert!(matches!(response.message, Message::Result { .. }));
