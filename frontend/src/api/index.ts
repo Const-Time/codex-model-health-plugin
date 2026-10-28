@@ -19,7 +19,7 @@ export interface MethodCatalog { method: Method; label: string; engine_version: 
 export interface Catalog { methods: MethodCatalog[] }
 export interface UpstreamSource { method: Method; label: string; url: string; bundled_commit: string }
 export interface UpstreamCheck { method: Method; status: 'identical' | 'ahead' | 'behind' | 'diverged'; checked_at: number; latest_commit: string; ahead_by: number; behind_by: number; compare_url: string }
-export interface Bootstrap { scheduled_detection_supported?: boolean; background_supported: boolean; catalog: Catalog; sources: UpstreamSource[]; accounts: {id: string; name: string; email?: string | null; plan: string | null}[]; keys: {id: string; name: string; enabled: boolean}[] }
+export interface Bootstrap { scheduled_detection_supported?: boolean; background_supported: boolean; catalog: Catalog; sources: UpstreamSource[]; accounts: {id: string; enabled?: boolean; name: string; email?: string | null; plan: string | null}[]; keys: {id: string; name: string; enabled: boolean}[] }
 interface ReportBase { valid_samples: number; planned_samples: number; reasons: string[] }
 export interface MeowReport extends ReportBase { method?: 'meow'; verdict: 'match' | 'mismatch' | 'insufficient'; model: string | null; matches: Record<string, number>; thresholds: Record<string, number>; quality_status: string }
 export interface ModelTraceReport extends ReportBase { method: 'modeltrace'; verdict: 'attributed' | 'insufficient'; analysis: null | { prediction_name: string; family_prediction_name: string; results: {model: string; display_name: string; probability: number}[]; family_probabilities: {family: string; display_name: string; probability: number}[] } }

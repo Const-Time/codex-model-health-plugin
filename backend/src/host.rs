@@ -63,7 +63,7 @@ pub async fn accounts(host: &HostClient) -> Result<Vec<AuthRuntimeAccount>, Plug
         accounts.extend(
             page.accounts
                 .into_iter()
-                .filter(|a| a.enabled && a.provider_id == "openai"),
+                .filter(|a| a.provider_id == "openai"),
         );
         cursor = page.next_cursor;
         let Some(next) = &cursor else {
@@ -127,9 +127,9 @@ pub async fn runtime_account(
 }
 pub async fn validate_account(host: &HostClient, run: &mut Run) -> Result<(), PluginFault> {
     let account = runtime_account(host, &run.account_id).await?;
-    if !account.enabled || account.provider_id != "openai" || account.account_id != run.account_id {
+    if account.provider_id != "openai" || account.account_id != run.account_id {
         return Err(invalid(
-            "检测账号已停用或所属账号/平台发生变化，请检查账号状态",
+            "检测账号已删除或所属账号/平台发生变化，请检查账号状态",
         ));
     }
     let identity = account_identity(&account);

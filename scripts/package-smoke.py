@@ -1,4 +1,4 @@
-"""Exercise the packaged executable over SDK v5; public GitHub checks are opt-in."""
+"""Exercise the packaged executable over SDK v7; public GitHub checks are opt-in."""
 import hashlib
 import json
 import os
@@ -230,6 +230,11 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
              b"" if body is None else json.dumps(body).encode())
         while True:
             message, payload = receive()
+            if message["type"] in ("suspend", "callback_consumed"):
+                continue
+            if message["type"] == "resume":
+                send({"type": "resumed", "id": message["id"], "epoch": message["epoch"]})
+                continue
             if message["type"] == "result":
                 assert message["id"] == identifier
                 return message["result"]["status"], json.loads(payload)
@@ -239,7 +244,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             send({"type": "result", "id": message["id"], "result": result}, response)
 
     try:
-        send({"type": "hello", "handshake": {"protocol_version": 5, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
+        send({"type": "hello", "handshake": {"protocol_version": 7, "artifact_sha256": hashlib.sha256(package.read_bytes()).hexdigest(), "plugin_id": "local.model-health", "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "configuration": {}, "contributes": manifest["contributes"]}})
         ready, _ = receive()
         assert ready["type"] == "ready"
         context = {"call_id": 1, "instance_id": "smoke", "generation": 1, "incarnation": "smoke", "stage": "management", "timeout_ms": 120000, "resource_stream": False, "resource_scope_id": "smoke", "request_id": None, "attempt_id": None, "account_id": None, "credential_revision": None}
@@ -348,7 +353,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         send({"type": "shutdown"})
         process.wait(timeout=15)
         assert process.returncode == 0, process.stderr.read().decode()
-        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v5=PASS; engine=4.5.4; accounts=1; keys=0; error_http=400; real_model_calls=0")
+        print("PACKAGE PASS: hashes=PASS; tmp_noexec=PASS; nonroot=PASS; empty_env=PASS; readonly_root=PASS; sdk_v7=PASS; engine=4.5.4; accounts=1; keys=0; error_http=400; real_model_calls=0")
     finally:
         if process.poll() is None:
             subprocess.run(["docker", "rm", "-f", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)

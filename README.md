@@ -17,7 +17,7 @@
 | [Meow LLM Detector — chen-006](https://github.com/chen-006/meow-llm-detector) | 题目、响应解析、答案归一化与行为概率评分；引擎 4.5.4 / 基线 4.5.3-predictive.2；[提交 0f31d4a](https://github.com/chen-006/meow-llm-detector/tree/0f31d4a96c9e953277ab8e337d3dbd3ec57b316e) | [PolyForm Noncommercial 1.0.0](vendor/meow/LICENSE) |
 | [ModelTrace — xqy2006](https://github.com/xqy2006/ModelTrace) | 原始指纹算法与统一候选库；[提交 d4131b3](https://github.com/xqy2006/ModelTrace/tree/d4131b30243dfa05e70180b5eedde742103f1d73) | [MIT](vendor/modeltrace/LICENSE) |
 
-宿主集成使用 [Codex Proxy 公开 SDK](https://github.com/zyycn/codex-proxy-rs/tree/b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164/backend/crates/gateway-plugin/sdk)、[@codex-proxy/ui](https://github.com/zyycn/codex-proxy-ui) v0.3.2，并参考 [官方插件示例与规范](https://github.com/zyycn/codex-proxy-plugins)。
+宿主集成使用 [Codex Proxy 公开 SDK](https://github.com/zyycn/codex-proxy-rs/tree/dd529d07ec8e13b3d2b504f45e51b494d3215e2a/backend/crates/gateway-plugin/sdk)、[@codex-proxy/ui](https://github.com/zyycn/codex-proxy-ui) v0.3.2，并参考 [官方插件示例与规范](https://github.com/zyycn/codex-proxy-plugins)。
 
 完整集成包按 [PolyForm Noncommercial 1.0.0](LICENSE) 分发，包含非商业用途条件；ModelTrace 等第三方文件仍保留各自的许可证。本仓库是源码公开项目，不将整个包宣称为 MIT 或无商业用途限制。原始版权声明、第三方组件声明与依赖许可证见 [NOTICE](NOTICE)，安装包中也附带相关文件。
 
@@ -26,8 +26,8 @@
 | 项目 | 当前支持 |
 | --- | --- |
 | 插件 ID / 版本 | `local.model-health` / `0.7.0` |
-| 进程协议 | RPC v5；必须与本次升级后的宿主配套，旧 3.13.0 的 RPC v4 不能运行此制品 |
-| 宿主清单范围 | `>=3.14.0, <4.0.0`；**还必须支持后台续调 v1 和 `host.account.probe` 管理员诊断扩展**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
+| 进程协议 | RPC v7；必须与本次升级后的宿主配套，需要本项目 3.15.0+；旧 RPC v5 制品需重新构建 |
+| 宿主清单范围 | `>=3.15.0, <4.0.0`；**还必须支持后台续调 v1 和 `host.account.probe` 管理员诊断扩展**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
 | 运行方式 | `trustedProcess`，插件以宿主系统身份运行，安装代表完整信任；不是操作系统沙箱 |
 | 扩展能力 | 独立管理页面和 maintenance v1 定时检查；不注册请求中间件、调度器或观察器 |
@@ -91,11 +91,11 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 
 ## 构建与验证
 
-构建工具：Docker Buildx、Node 24+、pnpm 10.10、Python 3.9+（安装包冒烟测试）、Rust 1.99.1（构建打包 CLI）。SDK 与 CLI 固定为同一个宿主提交 `b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164`，前端依赖锁定在 `frontend/pnpm-lock.yaml`；不要直接换成浮动 `main`。在仓库根目录执行：
+构建工具：Docker Buildx、Node 24+、pnpm 10.10、Python 3.9+（安装包冒烟测试）、Rust 1.99.1（构建打包 CLI）。SDK 与 CLI 固定为同一个宿主提交 `dd529d07ec8e13b3d2b504f45e51b494d3215e2a`，前端依赖锁定在 `frontend/pnpm-lock.yaml`；不要直接换成浮动 `main`。在仓库根目录执行：
 
 ```sh
 cargo install --git https://github.com/zyycn/codex-proxy-rs.git \
-  --rev b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164 \
+  --rev dd529d07ec8e13b3d2b504f45e51b494d3215e2a \
   --locked --root .tools/cpr-cli codex-proxy-plugin-cli
 CPR_PLUGIN_BIN="$PWD/.tools/cpr-cli/bin/cpr-plugin" ./scripts/build-linux.sh
 pnpm --dir frontend install --frozen-lockfile
@@ -135,9 +135,11 @@ pnpm --dir frontend build
 
 Actions 使用固定 SHA 的 [GitHub 官方 checkout](https://github.com/actions/checkout) 与 [artifact actions](https://github.com/actions/upload-artifact)，使用仓库 GITHUB_TOKEN 发布，不需要个人 PAT。
 
-## RPC v4 升级
+## RPC v7 升级
 
-v0.8.0 使用上游 `b8479b59` SDK、RPC v5、management v2 和 maintenance v1，须搭配本次新增 `host.account.probe` 的 Const-Time 宿主；最低宿主版本为 3.14.2。旧 v2 宿主请保留 v0.3.0。升级时在原实例切换制品，不需要删除实例；v0.8.0 将 runs 状态升级到 schema 2，旧历史和冻结计划继续读取。
+v0.9.0 使用固定上游 `dd529d07` SDK、RPC v7、management v2 和 maintenance v1，需要 Const-Time 宿主 3.15.0 或更高版本及原管理员诊断扩展。旧 RPC v5 宿主不能运行本制品。请先升级宿主，再在原实例切换制品；保留配置、检测历史、schedule v3 与 runs v2 状态，不需要删除实例。
+
+手动检测与定时任务均可选择停止调度的 OpenAI 账号，列表以“已停止调度”标识。诊断不会将账号重新启用，也不会绕过管理员权限、实际凭据校验、代理或串行资源限制；正常请求仍不会选用该账号。
 
 ## 定时账号探测
 
@@ -161,4 +163,4 @@ v0.8.0 会将插件私有 `schedule` 状态从 v1/v2 迁移到 v3，runs 从 v1 
 
 成功调用可能触发上游额度窗口计时，具体取决于平台；成功不证明没有风控。401 表示鉴权问题，403 可能涉及权限、区域或风控，429 可能限流或额度不足，均不直接当作封禁。
 
-免 Key 诊断是本 fork 的宿主扩展，不是上游 RPC v5 的标准能力；需要成对升级宿主和插件。手动诊断请求的输出上限为 4096 token（仅适用于支持该参数的上游），最多等待 90 秒，以容纳 ModelTrace 的完整数字回答。
+免 Key 诊断是本 fork 的宿主扩展，不是上游 RPC v7 的标准能力；需要成对升级宿主和插件。手动诊断请求的输出上限为 4096 token（仅适用于支持该参数的上游），最多等待 90 秒，以容纳 ModelTrace 的完整数字回答。

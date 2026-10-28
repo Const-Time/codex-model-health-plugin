@@ -3,11 +3,11 @@
   "name": "model-health",
   "displayName": "账号模型体检",
   "publisher": "local",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "选择已有账号，使用 Meow 或 ModelTrace 检测模型行为指纹；独立插件，不改写账号或主服务",
   "license": "PolyForm-Noncommercial-1.0.0",
   "engines": {
-    "codex-proxy-rs": ">=3.14.2, <4.0.0"
+    "codex-proxy-rs": ">=3.15.0, <4.0.0"
   },
   "main": "bin/plugin",
   "runtime": "trustedProcess",

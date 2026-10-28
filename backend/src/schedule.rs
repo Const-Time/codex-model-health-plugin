@@ -329,10 +329,10 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
         (id, operation, plan.model)
     };
     let result = async {
-        // Recheck enabled state immediately before dispatch; never silently switch accounts.
+        // Diagnostics may target scheduling-disabled accounts; never switch identities.
         let account = host::runtime_account(host, &id).await?;
-        if !account.enabled || account.provider_id != "openai" {
-            return Err(invalid("账号已停用或删除"));
+        if account.provider_id != "openai" {
+            return Err(invalid("账号已删除或平台发生变化"));
         }
         host.call(
             "host.account.probe",

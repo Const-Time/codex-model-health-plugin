@@ -38,7 +38,7 @@ jobs:
       - name: Install pinned packaging CLI
         run: |
           cargo install --git https://github.com/zyycn/codex-proxy-rs.git \
-            --rev b8479b59dbafbe84ffbbd2d0ff3ccea6cfa59164 \
+            --rev dd529d07ec8e13b3d2b504f45e51b494d3215e2a \
             --locked --root .tools/cpr-cli codex-proxy-plugin-cli
       - name: Build and offline acceptance tests
         env:

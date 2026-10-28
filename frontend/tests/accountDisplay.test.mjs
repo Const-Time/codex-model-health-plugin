@@ -19,3 +19,9 @@ test('missing email falls back to trimmed name', () => {
   assert.equal(accountDisplayName({ name: '  备用账号  ', email: null }), '备用账号')
   assert.equal(accountDisplayName({ name: '主账号', email: '   ' }), '主账号')
 })
+
+test('stopped scheduling accounts are clearly labelled without hiding their identity', () => {
+  assert.equal(accountDisplayName({ name: '备用账号', email: 'a@example.com', enabled: false }), 'a@example.com（已停止调度）')
+  assert.equal(accountDisplayName({ name: '备用账号', enabled: false }), '备用账号（已停止调度）')
+  assert.equal(accountDisplayName({ name: '主账号', enabled: true }), '主账号')
+})

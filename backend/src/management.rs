@@ -252,7 +252,7 @@ async fn dispatch(
                 .await?
                 .into_iter()
                 .map(|a| {
-                    json!({"id":a.account_id,"name":a.name,"email":a.email,"provider":a.provider_id,"plan":a.plan_type})
+                    json!({"id":a.account_id,"name":a.name,"email":a.email,"provider":a.provider_id,"plan":a.plan_type,"enabled":a.enabled})
                 })
                 .collect::<Vec<_>>();
             reply(

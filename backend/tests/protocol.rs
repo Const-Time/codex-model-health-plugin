@@ -111,10 +111,20 @@ impl Peer {
         write_frame(&mut self.writer, &frame).await.unwrap();
     }
     async fn receive(&mut self) -> Frame {
-        tokio::time::timeout(Duration::from_secs(30), read_frame(&mut self.reader))
-            .await
-            .expect("plugin timeout")
-            .unwrap()
+        loop {
+            let frame = tokio::time::timeout(Duration::from_secs(30), read_frame(&mut self.reader))
+                .await
+                .expect("plugin timeout")
+                .unwrap();
+            match frame.message {
+                Message::Suspend { .. } | Message::CallbackConsumed { .. } => {}
+                Message::Resume { id, epoch } => {
+                    self.send(Frame::control(Message::Resumed { id, epoch }))
+                        .await
+                }
+                _ => return frame,
+            }
+        }
     }
     async fn api(
         &mut self,
@@ -1075,9 +1085,8 @@ async fn full_plan_finishes_and_report_survives_reopen() {
 }
 
 #[tokio::test]
-async fn account_guard_rejects_disabled_or_replaced_identity_without_mutating_state() {
+async fn account_guard_rejects_replaced_identity_without_mutating_state() {
     for patch in [
-        json!({"enabled":false}),
         json!({"account_id":"another-local-account"}),
         json!({"provider_id":"xai"}),
         json!({"authentication_kind":"api_key"}),
@@ -1098,7 +1107,7 @@ async fn account_guard_rejects_disabled_or_replaced_identity_without_mutating_st
         ] {
             let error = peer.api(path, Some(input), &mut host).await.unwrap_err();
             assert_eq!(error.http_status, Some(400));
-            assert!(error.message.contains("身份已改变") || error.message.contains("已停用"));
+            assert!(error.message.contains("身份已改变") || error.message.contains("发生变化"));
             assert_eq!(host.state, saved);
             assert!(host.executions.is_empty());
         }
@@ -1621,7 +1630,7 @@ async fn schedule_failure_pauses_until_explicit_resume() {
     assert_eq!(host.executions.len(), 4);
 }
 #[tokio::test]
-async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_account() {
+async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_wrong_provider() {
     let mut peer = Peer::new().await;
     let mut host = Host::default();
     peer.api("api/schedule", Some(schedule_input()), &mut host)
@@ -1634,7 +1643,7 @@ async fn schedule_restart_does_not_replay_uncertain_attempt_or_probe_disabled_ac
     peer.reconcile(&mut host).await;
     assert!(host.executions.is_empty());
     assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
-    host.account_patch = Some(json!({"enabled":false}));
+    host.account_patch = Some(json!({"provider_id":"xai"}));
     for _ in 0..3 {
         due(&mut host);
         peer.reconcile(&mut host).await;
@@ -1766,4 +1775,28 @@ async fn schedule_schema_upgrade_preserves_legacy_due_times_and_uncertain_marker
     assert_eq!(value["accounts"], legacy["accounts"]);
     assert_eq!(value["enabled"], legacy["enabled"]);
     assert_eq!(value["interval_minutes"], legacy["interval_minutes"]);
+}
+
+#[tokio::test]
+async fn stopped_scheduling_accounts_remain_available_for_manual_and_scheduled_diagnostics() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        account_patch: Some(json!({"enabled":false})),
+        ..Host::default()
+    };
+    let run = peer.start(&mut host).await;
+    peer.api("api/runs/step", Some(json!({"id":run["id"]})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(host.executions.len(), 1);
+    assert_eq!(host.account_patch.as_ref().unwrap()["enabled"], false);
+    let mut config = schedule_input();
+    config["account_ids"] = json!(["account-a"]);
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 2);
+    assert_eq!(host.account_patch.as_ref().unwrap()["enabled"], false);
 }
