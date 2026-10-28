@@ -255,8 +255,9 @@ async fn dispatch(
                     json!({"id":a.account_id,"name":a.name,"email":a.email,"provider":a.provider_id,"plan":a.plan_type,"enabled":a.enabled})
                 })
                 .collect::<Vec<_>>();
+            let (scheduled, maximum) = host::diagnostic_capabilities(&call.host).await;
             reply(
-                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":[],"account_probe":true,"scheduled_detection_supported":host::scheduled_detection_supported(&call.host).await,"maximum_concurrent_accounts":host::diagnostic_concurrency(&call.host).await}),
+                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":[],"account_probe":true,"scheduled_detection_supported":scheduled,"maximum_concurrent_accounts":maximum}),
             )
         }
         ("POST", "api/upstreams/check") => {

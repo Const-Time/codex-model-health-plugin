@@ -259,6 +259,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         assert boot["accounts"][0]["email"] == "  smoke@example.com  "
         assert host["callbacks"] == ["host.auth.list", "host.account.probe.capabilities"]
         assert boot["scheduled_detection_supported"] is True
+        assert boot["maximum_concurrent_accounts"] == 1  # Legacy host capability response.
         status, error = api("api/models", {})
         assert status == 400 and error["error"]["message"] == "请求参数格式错误", error
         if continuous:

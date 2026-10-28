@@ -205,17 +205,20 @@ pub struct ExecutionFailure {
     pub fault: PluginFault,
 }
 pub async fn scheduled_detection_supported(host: &HostClient) -> bool {
-    metadata::<_, Value>(host, "host.account.probe.capabilities", json!({}))
-        .await
-        .is_ok_and(|value| value["scheduled_detection"] == true)
+    diagnostic_capabilities(host).await.0
 }
 pub async fn diagnostic_concurrency(host: &HostClient) -> usize {
-    metadata::<_, Value>(host, "host.account.probe.capabilities", json!({}))
+    diagnostic_capabilities(host).await.1
+}
+pub async fn diagnostic_capabilities(host: &HostClient) -> (bool, usize) {
+    let value = metadata::<_, Value>(host, "host.account.probe.capabilities", json!({}))
         .await
-        .ok()
-        .and_then(|value| value["maximum_concurrent_accounts"].as_u64())
+        .unwrap_or(Value::Null);
+    let maximum = value["maximum_concurrent_accounts"]
+        .as_u64()
         .unwrap_or(1)
-        .clamp(1, 3) as usize
+        .clamp(1, 3) as usize;
+    (value["scheduled_detection"] == true, maximum)
 }
 impl From<PluginFault> for ExecutionFailure {
     fn from(fault: PluginFault) -> Self {
