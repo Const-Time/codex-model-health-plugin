@@ -184,6 +184,11 @@ impl Peer {
         }
     }
     async fn reconcile(&mut self, host: &mut Host) {
+        self.reconcile_parallel(host, 0).await;
+    }
+    async fn reconcile_parallel(&mut self, host: &mut Host, overlap: usize) {
+        let mut held = Vec::new();
+        let mut accounts = std::collections::BTreeSet::new();
         let id = self.sequence;
         self.sequence += 2;
         self.send(Frame::control(Message::Call {
@@ -217,6 +222,13 @@ impl Peer {
                     params,
                 } => {
                     assert_eq!(parent_id, id);
+                    if method == "host.account.probe" && overlap > 0 {
+                        assert!(
+                            accounts.insert(params["account_id"].as_str().unwrap().to_owned()),
+                            "same account called twice in one batch"
+                        );
+                        assert!(accounts.len() <= overlap, "batch exceeded configured limit");
+                    }
                     let reply = match host.callback(&method, params, frame.payload) {
                         Ok((result, payload)) => Frame {
                             message: Message::Result { id: cid, result },
@@ -224,11 +236,22 @@ impl Peer {
                         },
                         Err(error) => Frame::control(Message::Error { id: cid, error }),
                     };
-                    self.send(reply).await;
+                    if method == "host.account.probe" && overlap > 0 {
+                        held.push(reply);
+                        if held.len() == overlap {
+                            for reply in held.drain(..) {
+                                self.send(reply).await;
+                            }
+                        }
+                    } else {
+                        self.send(reply).await;
+                    }
                 }
                 Message::Result { id: rid, result } => {
                     assert_eq!(rid, id);
                     assert_eq!(result, json!({}));
+                    assert!(held.is_empty());
+                    assert_eq!(accounts.len(), overlap);
                     return;
                 }
                 other => panic!("unexpected reconcile frame: {other:?}"),
@@ -252,6 +275,8 @@ struct Host {
     repeat_cursor: bool,
     numeric_answer: bool,
     no_scheduled_support: bool,
+    serial_host: bool,
+    fail_account: Option<String>,
     callbacks: Vec<String>,
     http: VecDeque<(u16, Vec<u8>)>,
     http_body: Option<Vec<u8>>,
@@ -356,9 +381,11 @@ impl Host {
                         .unwrap(),
                 ))
             }
-            "host.account.probe.capabilities" => {
-                metadata(json!({"scheduled_detection":!self.no_scheduled_support}))
-            }
+            "host.account.probe.capabilities" => metadata(if self.serial_host {
+                json!({"scheduled_detection":true})
+            } else {
+                json!({"scheduled_detection":!self.no_scheduled_support,"maximum_concurrent_accounts":3})
+            }),
             "host.account.probe" => {
                 assert!(self.state.values().any(|(v, _)| {
                     v["inflight"].is_string()
@@ -366,9 +393,11 @@ impl Host {
                             .as_array()
                             .is_some_and(|a| a.iter().any(|e| e["pending"].is_string()))
                 }));
+                let fails =
+                    self.fail || self.fail_account.as_deref() == params["account_id"].as_str();
                 self.executions.push(params);
                 self.bodies.push(serde_json::from_slice(&payload).unwrap());
-                if self.fail {
+                if fails {
                     let mut fault = PluginFault::new(ErrorCode::Upstream, "fixture");
                     fault.http_status = Some(429);
                     return Err(fault);
@@ -1340,6 +1369,121 @@ fn detection_input(method: &str) -> Value {
     value
 }
 #[tokio::test]
+async fn parallel_accounts_overlap_keep_reports_separate_and_isolate_failures() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        numeric_answer: true,
+        fail_account: Some("account-a".into()),
+        ..Host::default()
+    };
+    let mut config = detection_input("modeltrace");
+    config["account_ids"] = json!(["account-a", "account-b"]);
+    config["concurrency"] = json!(2);
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    let a = host.state["settings"].0["accounts"][0]["run_id"].clone();
+    let b = host.state["settings"].0["accounts"][1]["run_id"].clone();
+    assert_ne!(a, b);
+    // Neither probe response is returned until both account requests have arrived.
+    for _ in 0..3 {
+        peer.reconcile_parallel(&mut host, 2).await;
+    }
+    assert_eq!(host.executions.len(), 6);
+    assert_eq!(host.state["settings"].0["accounts"][0]["status"], "paused");
+    assert_eq!(host.state["settings"].0["accounts"][1]["status"], "ok");
+    let report = peer
+        .api("api/runs/get", Some(json!({"id":b})), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(report["run"]["status"], "completed");
+    assert_eq!(report["run"]["attempts"].as_array().unwrap().len(), 3);
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), 6);
+}
+#[tokio::test]
+async fn parallel_short_probes_overlap_but_old_hosts_fall_back_without_retries() {
+    for serial_host in [false, true] {
+        let mut peer = Peer::new().await;
+        let mut host = Host {
+            serial_host,
+            ..Host::default()
+        };
+        let mut config = schedule_input();
+        config["concurrency"] = json!(2);
+        peer.api("api/schedule", Some(config), &mut host)
+            .await
+            .unwrap();
+        due(&mut host);
+        if serial_host {
+            peer.reconcile_parallel(&mut host, 1).await;
+            assert_eq!(host.executions.len(), 1);
+            peer.reconcile_parallel(&mut host, 1).await;
+        } else {
+            peer.reconcile_parallel(&mut host, 2).await;
+        }
+        assert_eq!(host.executions.len(), 2);
+        assert!(
+            host.state["settings"].0["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|a| a["status"] == "ok" && a["failures"] == 0)
+        );
+    }
+}
+#[tokio::test]
+async fn parallel_plan_disable_pauses_all_and_lowering_limit_preserves_progress() {
+    let mut peer = Peer::new().await;
+    let mut host = Host {
+        numeric_answer: true,
+        ..Host::default()
+    };
+    let mut config = detection_input("modeltrace");
+    config["concurrency"] = json!(2);
+    config["account_ids"] = json!(["account-a", "account-b"]);
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    due(&mut host);
+    peer.reconcile(&mut host).await;
+    peer.reconcile_parallel(&mut host, 2).await;
+    let entries = host.state["settings"].0["accounts"].clone();
+    config["concurrency"] = json!(1);
+    peer.api("api/schedule", Some(config.clone()), &mut host)
+        .await
+        .unwrap();
+    assert_eq!(host.state["settings"].0["accounts"], entries);
+    peer.reconcile_parallel(&mut host, 1).await;
+    config["enabled"] = json!(false);
+    peer.api("api/schedule", Some(config), &mut host)
+        .await
+        .unwrap();
+    assert!(
+        host.state["settings"].0["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["status"] == "paused")
+    );
+    let count = host.executions.len();
+    peer.reconcile(&mut host).await;
+    assert_eq!(host.executions.len(), count);
+    for entry in entries.as_array().unwrap() {
+        let run = peer
+            .api(
+                "api/runs/get",
+                Some(json!({"id":entry["run_id"]})),
+                &mut host,
+            )
+            .await
+            .unwrap();
+        assert_eq!(run["run"]["status"], "paused");
+    }
+}
+#[tokio::test]
 async fn scheduled_meow_finishes_all_samples_and_keeps_report_after_restart() {
     let mut peer = Peer::new().await;
     let mut host = Host::default();
@@ -1764,7 +1908,7 @@ async fn schedule_schema_upgrade_preserves_legacy_due_times_and_uncertain_marker
     peer.send(Frame {
         message: Message::Call { id, method: "plugin.state.migrate".into(),
             context: CallContext { request:None,call_id:id,instance_id:"test".into(),generation:1,incarnation:"test".into(),stage:Stage::Configuration,timeout_ms:30000,resource_stream:false,resource_scope_id:"scope".into(),request_id:None,attempt_id:None,account_id:None,credential_revision:None }, params:json!({}) },
-        payload: serde_json::to_vec(&json!({"namespace":"schedule","from_schema_version":1,"to_schema_version":3,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap(),
+        payload: serde_json::to_vec(&json!({"namespace":"schedule","from_schema_version":1,"to_schema_version":4,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap(),
     }).await;
     let response = peer.receive().await;
     assert!(matches!(response.message, Message::Result { .. }));

@@ -1,4 +1,4 @@
-//! Durable, serial, opt-in account diagnostics with bounded retries and persisted progress.
+//! Durable, bounded parallel, opt-in account diagnostics with bounded retries and persisted progress.
 use crate::{Service, host, invalid, now_ms};
 use gateway_plugin_sdk::{PluginFault, call::host::*, client::HostClient};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ pub(crate) struct Schedule {
     pub detection: Detection,
     #[serde(default)]
     pub active_account: Option<String>,
+    #[serde(default = "serial")]
+    pub concurrency: usize,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -45,9 +47,15 @@ pub(crate) struct Configure {
     timing: Timing,
     #[serde(default)]
     detection: Detection,
+    #[serde(default = "serial")]
+    concurrency: usize,
     account_ids: Vec<String>,
     #[serde(default)]
     resume_accounts: Vec<String>,
+}
+
+fn serial() -> usize {
+    1
 }
 
 #[derive(Deserialize)]
@@ -78,8 +86,8 @@ pub(crate) fn migrate(input: StateMigrationRequest) -> Result<StateMigrationResu
         });
     }
     if input.namespace != "schedule"
-        || ![1, 2].contains(&input.from_schema_version)
-        || input.to_schema_version != 3
+        || ![1, 2, 3].contains(&input.from_schema_version)
+        || input.to_schema_version != 4
     {
         return Err(invalid("不支持此计划状态迁移"));
     }
@@ -97,9 +105,23 @@ pub(crate) fn migrate(input: StateMigrationRequest) -> Result<StateMigrationResu
             value["timing"] =
                 serde_json::to_value(Timing::default()).map_err(|_| invalid("计划编码失败"))?;
         }
-        value["detection"] =
-            serde_json::to_value(Detection::default()).map_err(|_| invalid("计划编码失败"))?;
+        if input.from_schema_version < 3 {
+            value["detection"] =
+                serde_json::to_value(Detection::default()).map_err(|_| invalid("计划编码失败"))?;
+        }
+        // The per-account running marker replaces the single active account.
+        if let Some(id) = value["active_account"].as_str().map(str::to_owned) {
+            for entry in value["accounts"]
+                .as_array_mut()
+                .ok_or_else(|| invalid("旧账号状态无效"))?
+            {
+                if entry["account_id"] == id {
+                    entry["status"] = json!("running");
+                }
+            }
+        }
         value["active_account"] = serde_json::Value::Null;
+        value["concurrency"] = json!(1);
         let _: Schedule =
             serde_json::from_value(value.clone()).map_err(|_| invalid("旧计划状态无效"))?;
         changes.push(StateMigrationChange::Replace {
@@ -127,6 +149,7 @@ pub(crate) async fn read(host: &HostClient) -> Result<(Schedule, Option<u64>), P
         None => Ok((
             Schedule {
                 interval_minutes: 360,
+                concurrency: 2,
                 detection: Detection::new_detection(),
                 ..Schedule::default()
             },
@@ -157,6 +180,9 @@ pub(crate) async fn save(
     host: &HostClient,
     input: Configure,
 ) -> Result<Schedule, PluginFault> {
+    if !(1..=3).contains(&input.concurrency) {
+        return Err(invalid("并行账号数必须为 1–3"));
+    }
     if !(60..=10080).contains(&input.interval_minutes)
         || input.account_ids.len() > 50
         || (input.enabled && (input.account_ids.is_empty() || input.model.trim().is_empty()))
@@ -182,7 +208,10 @@ pub(crate) async fn save(
     };
     let _lock = service.state.lock().await;
     let (old, version) = read(host).await?;
-    if old.active_account.is_some()
+    if old
+        .accounts
+        .iter()
+        .any(|e| e.status == "running" || e.pending.is_some())
         && input.enabled
         && (old.detection != input.detection || old.model != input.model.trim())
     {
@@ -191,9 +220,9 @@ pub(crate) async fn save(
         ));
     }
     if old
-        .active_account
-        .as_ref()
-        .is_some_and(|id| !input.account_ids.contains(id))
+        .accounts
+        .iter()
+        .any(|e| e.status == "running" && !input.account_ids.contains(&e.account_id))
     {
         return Err(invalid("请先关闭计划并保存，再移除正在检测的账号"));
     }
@@ -251,7 +280,7 @@ pub(crate) async fn save(
                 entry.failures = 0;
             }
         }
-        if !input.enabled && old.active_account.as_ref() == Some(&id) {
+        if !input.enabled && entry.status == "running" {
             entry.status = "paused".into();
             entry.pending = None;
             entry.message = "计划已关闭，本轮进度已保留；勾选恢复后继续".into();
@@ -265,11 +294,8 @@ pub(crate) async fn save(
         timing: input.timing,
         accounts,
         detection: input.detection,
-        active_account: if input.enabled {
-            old.active_account
-        } else {
-            None
-        },
+        active_account: None,
+        concurrency: input.concurrency,
     };
     write(host, &plan, version).await?;
     Ok(plan)
@@ -278,14 +304,12 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
     let Ok(_execution) = service.execution.try_acquire() else {
         return Ok(());
     };
-    if read(host).await?.0.detection.is_full() {
-        return detection::tick_reserved(service, host).await;
-    }
-    let (id, operation, model) = {
+    // Older hosts remain serial instead of consuming retry budgets on local capacity errors.
+    let maximum = host::diagnostic_concurrency(host).await;
+    let targets = {
         let _lock = service.state.lock().await;
         let (mut plan, version) = read(host).await?;
-        // A previous invocation ended without committing a result. Never infer it was not sent.
-        if plan.accounts.iter().any(|e| e.pending.is_some()) {
+        if !plan.detection.is_full() && plan.accounts.iter().any(|e| e.pending.is_some()) {
             for entry in &mut plan.accounts {
                 if entry.pending.take().is_some() {
                     entry.status = "paused".into();
@@ -295,6 +319,51 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
             write(host, &plan, version).await?;
             return Ok(());
         }
+        let mut targets = select_targets(&plan, now_ms());
+        targets.truncate(maximum);
+        targets
+    };
+    let execute = |index: usize| {
+        let id = targets.get(index);
+        async move {
+            let Some(id) = id else {
+                return Ok(());
+            };
+            if read(host).await?.0.detection.is_full() {
+                detection::tick_reserved(service, host, id).await
+            } else {
+                tick_short(service, host, id).await
+            }
+        }
+    };
+    // Join every admitted account, even if another fails. No detached requests or hidden queue.
+    let (a, b, c) = tokio::join!(execute(0), execute(1), execute(2));
+    a.and(b).and(c)
+}
+fn select_targets(plan: &Schedule, now: u64) -> Vec<String> {
+    if !plan.enabled {
+        return vec![];
+    }
+    let mut entries: Vec<_> = plan
+        .accounts
+        .iter()
+        .filter(|e| e.status == "running" || (e.status != "paused" && e.next_at <= now))
+        .collect();
+    entries.sort_by_key(|e| (e.status != "running", e.next_at));
+    entries
+        .into_iter()
+        .take(plan.concurrency.clamp(1, 3))
+        .map(|e| e.account_id.clone())
+        .collect()
+}
+async fn tick_short(
+    service: &Service,
+    host: &HostClient,
+    account_id: &str,
+) -> Result<(), PluginFault> {
+    let (id, operation, model) = {
+        let _lock = service.state.lock().await;
+        let (mut plan, version) = read(host).await?;
         if !plan.enabled {
             return Ok(());
         }
@@ -311,12 +380,12 @@ pub(crate) async fn tick(service: &Service, host: &HostClient) -> Result<(), Plu
             .timing
             .prepare(plan.interval_minutes)?
             .next_after(now)?;
-        let Some(entry) = plan
-            .accounts
-            .iter_mut()
-            .filter(|e| e.status != "paused" && e.next_at <= now)
-            .min_by_key(|e| e.next_at)
-        else {
+        let Some(entry) = plan.accounts.iter_mut().find(|e| {
+            e.account_id == account_id
+                && e.status != "paused"
+                && e.pending.is_none()
+                && e.next_at <= now
+        }) else {
             return Ok(());
         };
         let operation = crate::now_nanos().to_string();
@@ -421,9 +490,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parallel_migration_preserves_in_progress_run_and_legacy_serial_limit() {
+        let legacy = json!({"enabled":true,"model":"model","interval_minutes":360,"timing":{"mode":"daily","cron":"0 9 * * *","daily_time":"09:00","timezone":"Asia/Shanghai"},"detection":{"method":"modeltrace","tier":"fixed","claimed_model":"unified"},"active_account":"a","accounts":[{"account_id":"a","name":"name","next_at":123,"status":"running","checked_at":99,"message":"1/3","pending":null,"run_id":"0-123","failures":1}]});
+        let request=serde_json::from_value(json!({"namespace":"schedule","from_schema_version":3,"to_schema_version":4,"records":[{"key":"settings","version":8,"value":legacy}]})).unwrap();
+        let result = serde_json::to_value(migrate(request).unwrap()).unwrap();
+        let migrated = &result["changes"][0]["value"];
+        assert_eq!(migrated["accounts"], legacy["accounts"]);
+        assert_eq!(migrated["detection"], legacy["detection"]);
+        assert_eq!(migrated["timing"], legacy["timing"]);
+        assert_eq!(migrated["concurrency"], 1);
+        assert!(migrated["active_account"].is_null());
+    }
+
+    #[test]
+    fn batch_limit_prioritizes_existing_runs_and_never_admits_paused_or_future_accounts() {
+        let mut plan:Schedule=serde_json::from_value(json!({"enabled":true,"model":"m","interval_minutes":60,"concurrency":3,"accounts":(0..6).map(|i|json!({"account_id":i.to_string(),"name":"n","next_at":if i==5 {999} else {0},"status":if i==0 {"paused"} else if i==4 {"running"} else {"waiting"},"checked_at":null,"message":"","pending":null})).collect::<Vec<_>>() })).unwrap();
+        assert_eq!(select_targets(&plan, 100), vec!["4", "1", "2"]);
+        plan.concurrency = 1;
+        assert_eq!(select_targets(&plan, 100), vec!["4"]);
+        plan.enabled = false;
+        assert!(select_targets(&plan, 100).is_empty());
+    }
+
+    #[test]
     fn calendar_migration_keeps_timing_and_does_not_enable_full_detection() {
         let legacy = json!({"enabled":true,"model":"gpt-6-astra","interval_minutes":360,"timing":{"mode":"cron","cron":"0 9 * * *","daily_time":"09:00","timezone":"Asia/Shanghai"},"accounts":[{"account_id":"a","name":"a","next_at":123,"status":"paused","checked_at":null,"message":"old","pending":"uncertain"}]});
-        let request = serde_json::from_value(json!({"namespace":"schedule","from_schema_version":2,"to_schema_version":3,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap();
+        let request = serde_json::from_value(json!({"namespace":"schedule","from_schema_version":2,"to_schema_version":4,"records":[{"key":"settings","version":7,"value":legacy}]})).unwrap();
         let result = serde_json::to_value(migrate(request).unwrap()).unwrap();
         let value = &result["changes"][0]["value"];
         assert_eq!(value["timing"], legacy["timing"]);

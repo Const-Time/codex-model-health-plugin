@@ -78,7 +78,7 @@
     },
     {
       "namespace": "schedule",
-      "schemaVersion": 3,
+      "schemaVersion": 4,
       "schema": {
         "type": "object",
         "required": [
@@ -88,7 +88,8 @@
           "accounts",
           "timing",
           "detection",
-          "active_account"
+          "active_account",
+          "concurrency"
         ],
         "properties": {
           "enabled": {
@@ -169,6 +170,11 @@
               "string",
               "null"
             ]
+          },
+          "concurrency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
           }
         }
       },
@@ -177,7 +183,8 @@
       "maximumValueBytes": 65536,
       "migratesFrom": [
         1,
-        2
+        2,
+        3
       ]
     }
   ]

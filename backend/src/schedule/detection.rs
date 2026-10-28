@@ -94,16 +94,14 @@ pub(super) async fn pause_active(
     host: &HostClient,
     plan: &super::Schedule,
 ) -> Result<(), PluginFault> {
-    if let Some(id) = plan
-        .active_account
-        .as_ref()
-        .and_then(|id| plan.accounts.iter().find(|e| &e.account_id == id))
-        .and_then(|e| e.run_id.as_deref())
-        && let Ok((mut run, version)) = management::find(host, id).await
-        && !run.finished()
-    {
-        run.status = Status::Paused;
-        host::write(host, &run, Some(version)).await?;
+    for entry in plan.accounts.iter().filter(|e| e.status == "running") {
+        if let Some(id) = entry.run_id.as_deref()
+            && let Ok((mut run, version)) = management::find(host, id).await
+            && !run.finished()
+        {
+            run.status = Status::Paused;
+            host::write(host, &run, Some(version)).await?;
+        }
     }
     Ok(())
 }
@@ -137,57 +135,72 @@ async fn start_or_resume(
     management::create_run(service, host, query, true).await
 }
 
-// One maintenance invocation creates a run OR executes one question. The shared execution lease
-// is held by schedule::tick, so manual tests and other scheduled accounts cannot overlap it.
-pub(super) async fn tick_reserved(service: &Service, host: &HostClient) -> Result<(), PluginFault> {
-    let (entry, detection, model, starting) = {
-        let _lock = service.state.lock().await;
-        let (mut plan, version) = read(host).await?;
-        if !plan.enabled {
-            return Ok(());
-        }
-        if let Some(id) = &plan.active_account {
-            let Some(entry) = plan.accounts.iter_mut().find(|e| &e.account_id == id) else {
-                return Err(invalid("活动检测账号缺失"));
-            };
-            if entry.pending.is_some() || entry.run_id.is_none() {
-                entry.pending = None;
-                entry.status = "paused".into();
-                entry.message = "上次创建检测任务中断，请核对后手动恢复".into();
-                plan.active_account = None;
-                write(host, &plan, version).await?;
+// Each selected account creates a run OR executes one question per tick.
+// The batch lease excludes manual execution and overlapping reconciliation calls.
+pub(super) async fn tick_reserved(
+    service: &Service,
+    host: &HostClient,
+    account_id: &str,
+) -> Result<(), PluginFault> {
+    let (entry, detection, model, starting) =
+        {
+            let _lock = service.state.lock().await;
+            let (mut plan, version) = read(host).await?;
+            if !plan.enabled {
                 return Ok(());
             }
-            (entry.clone(), plan.detection, plan.model, false)
-        } else {
-            let now = now_ms();
-            let next = plan
-                .timing
-                .prepare(plan.interval_minutes)?
-                .next_after(now)?;
-            let Some(entry) = plan
+            if plan
                 .accounts
-                .iter_mut()
-                .filter(|e| e.status != "paused" && e.next_at <= now)
-                .min_by_key(|e| e.next_at)
-            else {
-                return Ok(());
-            };
-            entry.status = "running".into();
-            entry.pending = Some("creating-detection".into());
-            entry.checked_at = Some(now);
-            entry.next_at = next;
-            let snapshot = entry.clone();
-            plan.active_account = Some(entry.account_id.clone());
-            write(host, &plan, version).await?;
-            (snapshot, plan.detection, plan.model, true)
-        }
-    };
+                .iter()
+                .any(|e| e.account_id == account_id && e.status == "running")
+            {
+                let Some(entry) = plan
+                    .accounts
+                    .iter_mut()
+                    .find(|e| e.account_id == account_id)
+                else {
+                    return Err(invalid("活动检测账号缺失"));
+                };
+                if entry.pending.is_some() || entry.run_id.is_none() {
+                    entry.pending = None;
+                    entry.status = "paused".into();
+                    entry.message = "上次创建检测任务中断，请核对后手动恢复".into();
+
+                    write(host, &plan, version).await?;
+                    return Ok(());
+                }
+                (entry.clone(), plan.detection, plan.model, false)
+            } else {
+                let now = now_ms();
+                let next = plan
+                    .timing
+                    .prepare(plan.interval_minutes)?
+                    .next_after(now)?;
+                let Some(entry) = plan.accounts.iter_mut().find(|e| {
+                    e.account_id == account_id && e.status != "paused" && e.next_at <= now
+                }) else {
+                    return Ok(());
+                };
+                entry.status = "running".into();
+                entry.pending = Some("creating-detection".into());
+                entry.checked_at = Some(now);
+                entry.next_at = next;
+                let snapshot = entry.clone();
+
+                write(host, &plan, version).await?;
+                (snapshot, plan.detection, plan.model, true)
+            }
+        };
     if starting {
         let result = start_or_resume(service, host, &entry, &detection, &model).await;
         let _lock = service.state.lock().await;
         let (mut plan, version) = read(host).await?;
-        if !plan.enabled || plan.active_account.as_deref() != Some(&entry.account_id) {
+        if !plan.enabled
+            || !plan
+                .accounts
+                .iter()
+                .any(|e| e.account_id == entry.account_id && e.status == "running")
+        {
             if let Ok(mut run) = result {
                 let (_, v) = management::find(host, &run.id).await?;
                 run.status = Status::Paused;
@@ -231,7 +244,6 @@ pub(super) async fn tick_reserved(service: &Service, host: &HostClient) -> Resul
                         "，下轮重试"
                     }
                 );
-                plan.active_account = None;
             }
         }
         return write(host, &plan, version).await;
@@ -256,7 +268,11 @@ pub(super) async fn tick_reserved(service: &Service, host: &HostClient) -> Resul
     }.await;
     let _lock = service.state.lock().await;
     let (mut plan, version) = read(host).await?;
-    if plan.active_account.as_deref() != Some(&entry.account_id) {
+    if !plan
+        .accounts
+        .iter()
+        .any(|e| e.account_id == entry.account_id && e.status == "running")
+    {
         return Ok(());
     }
     let next = plan
@@ -302,11 +318,9 @@ pub(super) async fn tick_reserved(service: &Service, host: &HostClient) -> Resul
                 Status::Completed => {
                     current.status = "ok".into();
                     current.next_at = next;
-                    plan.active_account = None;
                 }
                 Status::Paused | Status::Stopped => {
                     current.status = "paused".into();
-                    plan.active_account = None;
                 }
                 _ => {}
             }
@@ -324,7 +338,7 @@ pub(super) async fn tick_reserved(service: &Service, host: &HostClient) -> Resul
             );
             if current.failures >= 3 {
                 current.status = "paused".into();
-                plan.active_account = None;
+
                 if let Ok((mut run, v)) = management::find(host, id).await {
                     run.status = Status::Paused;
                     host::write(host, &run, Some(v)).await?;

@@ -256,7 +256,7 @@ async fn dispatch(
                 })
                 .collect::<Vec<_>>();
             reply(
-                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":[],"account_probe":true,"scheduled_detection_supported":host::scheduled_detection_supported(&call.host).await}),
+                json!({"catalog":catalog,"sources":updates::sources()?,"accounts":accounts,"keys":[],"account_probe":true,"scheduled_detection_supported":host::scheduled_detection_supported(&call.host).await,"maximum_concurrent_accounts":host::diagnostic_concurrency(&call.host).await}),
             )
         }
         ("POST", "api/upstreams/check") => {
@@ -347,11 +347,12 @@ pub(crate) async fn create_run(
     let _lock = service.state.lock().await;
     let history = histories(host).await?;
     let schedule = crate::schedule::read(host).await?.0;
-    let active_run = schedule
+    let active_runs: Vec<_> = schedule
         .accounts
         .iter()
-        .find(|entry| Some(&entry.account_id) == schedule.active_account.as_ref())
-        .and_then(|entry| entry.run_id.as_deref());
+        .filter(|entry| entry.status == "running")
+        .filter_map(|entry| entry.run_id.as_deref())
+        .collect();
     let slot = (0..SLOTS)
         .find(|s| !history.iter().any(|(r, _)| r.slot == *s))
         .or_else(|| {
@@ -363,7 +364,7 @@ pub(crate) async fn create_run(
                         || (r.scheduled
                             && r.status == Status::Paused
                             && r.inflight.is_none()
-                            && active_run != Some(r.id.as_str()))
+                            && !active_runs.contains(&r.id.as_str()))
                 })
                 .map(|(r, _)| r.slot)
         })
@@ -472,7 +473,6 @@ pub(crate) async fn step_reserved(
         if run.scheduled {
             let plan = crate::schedule::read(host).await?.0;
             if !plan.enabled
-                || plan.active_account.as_deref() != Some(&run.account_id)
                 || !plan
                     .accounts
                     .iter()

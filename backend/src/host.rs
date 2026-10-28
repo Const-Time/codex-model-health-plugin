@@ -209,6 +209,14 @@ pub async fn scheduled_detection_supported(host: &HostClient) -> bool {
         .await
         .is_ok_and(|value| value["scheduled_detection"] == true)
 }
+pub async fn diagnostic_concurrency(host: &HostClient) -> usize {
+    metadata::<_, Value>(host, "host.account.probe.capabilities", json!({}))
+        .await
+        .ok()
+        .and_then(|value| value["maximum_concurrent_accounts"].as_u64())
+        .unwrap_or(1)
+        .clamp(1, 3) as usize
+}
 impl From<PluginFault> for ExecutionFailure {
     fn from(fault: PluginFault) -> Self {
         Self {
