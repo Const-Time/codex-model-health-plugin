@@ -1,4 +1,6 @@
 {
   "repository": "https://github.com/chen-006/meow-llm-detector",
-  "commit": "0f31d4a96c9e953277ab8e337d3dbd3ec57b316e"
+  "commit": "dc608d5c097abf96575d5b34f49952ddbd27c281",
+  "baseline": "benchmarks/official/meow-gpt-other-cap98-efficient--4.5.4-predictive.20261003.1.meow.json",
+  "baseline_sha256": "9273dc33374e8be234a950437f4b7238228fbe096f051b1f210e46297c612362"
 }

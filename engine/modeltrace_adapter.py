@@ -17,6 +17,12 @@ SOURCE = json.loads((VENDOR / "SOURCE.json").read_text())
 BANK_PATH = VENDOR / "data/unified_bank.json"
 BANK = fingerprint.load_bank(BANK_PATH)
 BANK_HASH = hashlib.sha256(BANK_PATH.read_bytes()).hexdigest()
+LEGACY_BANK_PATH = VENDOR / "data/unified_bank-d4131b3.json"
+LEGACY_BANK_HASH = hashlib.sha256(LEGACY_BANK_PATH.read_bytes()).hexdigest()
+BANKS = {
+    (BANK_HASH, SOURCE["commit"][:7]): BANK,
+    (LEGACY_BANK_HASH, "d4131b3"): fingerprint.load_bank(LEGACY_BANK_PATH),
+}
 MAX_NUMBERS = 4096
 
 
@@ -29,7 +35,8 @@ def catalog():
 
 
 def check_plan(plan):
-    if plan["hash"] != BANK_HASH or plan["engine_version"] != SOURCE["commit"][:7]:
+    bank = BANKS.get((plan["hash"], plan["engine_version"]))
+    if bank is None:
         raise AppError("baseline_changed")
     if plan["tier"] != "fixed" or plan["claimed_model"] != "unified":
         raise AppError("invalid_modeltrace_plan")
@@ -41,6 +48,7 @@ def check_plan(plan):
             raise AppError("invalid_modeltrace_plan")
         if not isinstance(job["prompt"], str) or not 1 <= len(job["prompt"].encode()) <= 4096:
             raise AppError("invalid_modeltrace_plan")
+    return bank
 
 
 def prepare(data):
@@ -57,13 +65,14 @@ def prepare(data):
     }.items() if k not in {"models", "tiers", "family_count", "label"}}
 
 
-def evaluate(answer, job):
+def evaluate(answer, job, bank=None):
+    bank = BANK if bank is None else bank
     numbers = fingerprint.parse_numbers(answer)
     if len(numbers) > MAX_NUMBERS:
         return {"status": "error", "error": "too_many_numbers"}
     try:
         analysis = fingerprint.analyze_global_outputs(
-            [{"text": answer, "expected_count": job["expected_count"]}], BANK)
+            [{"text": answer, "expected_count": job["expected_count"]}], bank)
     except ValueError as error:
         # 只把上游明确的短答错误转换为样本失败，其他评分故障保持可见。
         if str(error) != "没有可用回答：请粘贴完整数字序列；拒答或严重截断的回答不会计入。":
@@ -75,7 +84,7 @@ def evaluate(answer, job):
 
 
 def score(plan, results):
-    check_plan(plan)
+    bank = check_plan(plan)
     jobs = {j["job_id"]: j for j in plan["jobs"]}
     outputs, seen = [], set()
     for result in results:
@@ -90,7 +99,7 @@ def score(plan, results):
                 type(n) is not int or not 1 <= n <= 355 for n in numbers):
             raise AppError("invalid_number_sample")
         outputs.append({"text": ",".join(map(str, numbers)), "expected_count": jobs[identity]["expected_count"]})
-    analysis = fingerprint.analyze_global_outputs(outputs, BANK) if outputs else None
+    analysis = fingerprint.analyze_global_outputs(outputs, bank) if outputs else None
     valid = analysis["used_outputs"] if analysis else 0
     complete = valid == len(jobs)
     return {"method": "modeltrace", "verdict": "attributed" if complete else "insufficient",

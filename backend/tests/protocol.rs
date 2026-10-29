@@ -575,8 +575,8 @@ async fn run_account_name_prefers_trimmed_email_and_falls_back_to_name() {
     assert_eq!(run["account_name"], "");
 }
 
-const MEOW_SHA: &str = "0f31d4a96c9e953277ab8e337d3dbd3ec57b316e";
-const TRACE_SHA: &str = "d4131b30243dfa05e70180b5eedde742103f1d73";
+const MEOW_SHA: &str = "dc608d5c097abf96575d5b34f49952ddbd27c281";
+const TRACE_SHA: &str = "6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2";
 
 fn github_reply(host: &mut Host, status: u16, body: Value) {
     host.http
@@ -891,7 +891,7 @@ async fn modeltrace_uses_same_host_path_and_resumes_frozen_plan() {
             .as_array()
             .unwrap()
             .len(),
-        17
+        18
     );
     let history = peer.api("api/runs", None, &mut host).await.unwrap();
     assert_eq!(history["runs"][0]["method"], "modeltrace");
@@ -1083,7 +1083,7 @@ async fn full_plan_finishes_and_report_survives_reopen() {
     };
     let run = peer.start(&mut host).await;
     let mut latest = Value::Null;
-    for _ in 0..36 {
+    for _ in 0..32 {
         latest = peer
             .api("api/runs/step", Some(json!({"id":run["id"]})), &mut host)
             .await
@@ -1091,10 +1091,10 @@ async fn full_plan_finishes_and_report_survives_reopen() {
             .clone();
     }
     assert_eq!(latest["status"], "completed");
-    assert_eq!(latest["report"]["valid_samples"], 36);
-    assert_eq!(host.executions.len(), 36);
-    assert_eq!(host.account("account-b")["credential_revision"], 37);
-    assert_eq!(latest["credential_revision"], 36);
+    assert_eq!(latest["report"]["valid_samples"], 32);
+    assert_eq!(host.executions.len(), 32);
+    assert_eq!(host.account("account-b")["credential_revision"], 33);
+    assert_eq!(latest["credential_revision"], 32);
     assert_eq!(latest["account_identity"], run["account_identity"]);
     assert!(serde_json::to_vec(&latest).unwrap().len() < 262144);
     let original = latest.clone();
@@ -1110,7 +1110,7 @@ async fn full_plan_finishes_and_report_survives_reopen() {
         .await
         .unwrap();
     assert_eq!(restored["run"], original);
-    assert_eq!(host.executions.len(), 36);
+    assert_eq!(host.executions.len(), 32);
 }
 
 #[tokio::test]
@@ -1492,7 +1492,7 @@ async fn scheduled_meow_finishes_all_samples_and_keeps_report_after_restart() {
         .unwrap();
     due(&mut host);
     peer.reconcile(&mut host).await;
-    for _ in 0..36 {
+    for _ in 0..32 {
         peer.reconcile(&mut host).await;
     }
     let id = host.state["settings"].0["accounts"][0]["run_id"].clone();
@@ -1501,9 +1501,9 @@ async fn scheduled_meow_finishes_all_samples_and_keeps_report_after_restart() {
         .await
         .unwrap();
     assert_eq!(result["run"]["status"], "completed", "{result}");
-    assert_eq!(result["run"]["report"]["valid_samples"], 36);
+    assert_eq!(result["run"]["report"]["valid_samples"], 32);
     assert!(serde_json::to_vec(&result["run"]).unwrap().len() < 262144);
-    assert_eq!(host.executions.len(), 36);
+    assert_eq!(host.executions.len(), 32);
     drop(peer);
     let mut peer = Peer::new().await;
     peer.reconcile(&mut host).await;
@@ -1512,7 +1512,7 @@ async fn scheduled_meow_finishes_all_samples_and_keeps_report_after_restart() {
         .await
         .unwrap();
     assert_eq!(reopened["run"], result["run"]);
-    assert_eq!(host.executions.len(), 36);
+    assert_eq!(host.executions.len(), 32);
 }
 #[tokio::test]
 async fn scheduled_interrupted_attempt_consumes_retry_before_next_request() {

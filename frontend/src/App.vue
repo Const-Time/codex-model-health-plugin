@@ -10,6 +10,7 @@ import { formatTime, methodText, statusText, tierText, verdict, tone, reasonText
 import SourceUpdates from './SourceUpdates.vue'
 import SchedulePanel from './SchedulePanel.vue'
 import ModelSelect from './ModelSelect.vue'
+import { requestModels } from './requestModels'
 
 const preview = import.meta.env.DEV && new URLSearchParams(location.search).get('preview') === '1'
 const bootstrap = ref<Bootstrap | null>(null), history = ref<History[]>([]), run = ref<Run | null>(null)
@@ -43,7 +44,7 @@ function message(cause: unknown) { return cause instanceof Error ? cause.message
 async function loadHistory() { history.value = (await api<{runs: History[]}>('runs')).runs; lastHistoryRefresh = Date.now() }
 async function load() {
   loading.value = true; error.value = ''
-  try { bootstrap.value = await api<Bootstrap>('bootstrap'); await loadHistory(); models.value = [...new Set(bootstrap.value.catalog.methods.flatMap(c => c.models.map(m => m.id)))] }
+  try { bootstrap.value = await api<Bootstrap>('bootstrap'); await loadHistory(); models.value = requestModels(bootstrap.value.catalog.methods.flatMap(c => c.models.map(m => m.id))) }
   catch (cause) { error.value = message(cause) }
   finally { loading.value = false }
 }
@@ -106,9 +107,10 @@ onScopeDispose(() => { disposed = true; clearTimeout(pollTimer) })
           <div class="form-grid">
             <div class="field col-span-full"><label id="method-label">检测方法</label><BaseSegmented v-model="method" aria-labelledby="method-label" label="检测方法" :options="methodOptions" :disabled="loading || pumping || action" /></div>
             <div class="field"><label id="account-label">检测账号</label><BaseSelect v-model="account" aria-labelledby="account-label" :options="accountOptions" :disabled="loading || pumping" placeholder="选择已有账号" filterable /></div>
-            <div class="field"><label id="model-label">请求模型</label><ModelSelect v-model="model" label="请求模型" :models="models" :disabled="loading || pumping" /><p class="muted text-cp-xs m-0">候选来自检测基线，请确认账号支持；也可选择自定义模型。</p></div>
+            <div class="field"><label id="model-label">请求模型</label><ModelSelect v-model="model" label="请求模型" :models="models" :disabled="loading || pumping" /><p class="muted text-cp-xs m-0">请选择账号支持的模型；也可输入自定义模型。请求模型和对照基线独立选择。</p></div>
             <div class="field"><label id="claimed-label">对照基线</label><BaseSelect v-if="method === 'meow'" v-model="claimed" aria-labelledby="claimed-label" :options="catalog?.models.map(m=>({value:m.id,label:m.label || m.id})) ?? []" :disabled="loading || pumping" placeholder="选择要核对的模型" /><BaseSelect v-else model-value="unified" aria-labelledby="claimed-label" :options="[{value:'unified',label:`统一候选库 · ${catalog?.models.length ?? 0} 个模型`}]" disabled /></div>
-            <div v-if="method === 'meow'" class="field col-span-full"><label id="tier-label">检测档位</label><BaseSegmented v-model="tier" aria-labelledby="tier-label" label="检测档位" :options="tierOptions" :disabled="pumping" /></div>
+            <p v-if="model === 'gpt-6.1-terra'" class="col-span-full muted text-cp-xs m-0">上游暂无 6.1 Terra 专属基线，报告仅表示与现有候选的行为相似度。</p>
+            <div v-if="method === 'meow'" class="field col-span-full"><label id="tier-label">检测档位</label><BaseSegmented v-model="tier" aria-labelledby="tier-label" label="检测档位" :options="tierOptions" :disabled="pumping" /><p class="muted text-cp-xs m-0">新版 Meow 建议使用完整 128 题区分 6.1 Sol 与 6 Astra；快速档仅供初筛。</p></div>
             <p v-else class="col-span-full muted text-cp-sm m-0">三轮独立数字选择 · 同时比较 GPT / Claude 家族候选</p>
           </div>
           <div class="start-row"><p class="muted text-cp-xs">{{ count }} 个样本 · 最多 {{ count + Math.ceil(count/2) }} 次请求（含重试）<br>使用账号的真实上游额度，不扣用户 Key 额度；每次仅检测一个请求。</p><BaseButton variant="primary" :disabled="!canStart" :loading="starting" @click="start"><Play class="size-4" />开始检测</BaseButton></div>

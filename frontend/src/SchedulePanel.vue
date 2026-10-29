@@ -133,7 +133,7 @@ onMounted(load)
         <div class="field col-span-full">
           <label>请求模型</label>
           <ModelSelect v-model="plan.model" label="定时探测请求模型" :models="models" :disabled="busy || !loaded" />
-          <p class="muted text-cp-xs m-0">候选来自检测基线；所有所选账号使用同一模型，请确认均支持。列表外可选择自定义模型。</p>
+          <p class="muted text-cp-xs m-0">所有所选账号使用同一请求模型，请确认均支持。列表外可选择自定义模型。</p>
         </div>
         <div class="field col-span-full">
           <label>调度方式</label>

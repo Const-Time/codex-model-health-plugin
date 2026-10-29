@@ -33,8 +33,17 @@ class ModelTraceTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256((adapter.VENDOR / name).read_bytes()).hexdigest(), digest)
         catalogs = worker.handle({"op": "catalog"})["methods"]
         self.assertEqual([c["method"] for c in catalogs], ["meow", "modeltrace"])
-        self.assertEqual(len(catalogs[1]["models"]), 17)
+        self.assertEqual(len(catalogs[1]["models"]), 18)
         self.assertEqual(catalogs[1]["family_count"], 2)
+
+    def test_legacy_bank_remains_available_for_saved_runs(self):
+        plan = {**self.plan, 'hash':adapter.LEGACY_BANK_HASH, 'engine_version':'d4131b3', 'version':'d4131b3'}
+        bank = adapter.check_plan(plan)
+        self.assertEqual(len(bank['models']), 17)
+        samples = [{'job_id':job['job_id'], **adapter.evaluate('7,' * 333, job, bank)} for job in plan['jobs']]
+        result = adapter.score(plan, samples)
+        self.assertEqual(result['valid_samples'], 3)
+        self.assertEqual(len(result['analysis']['results']), 17)
 
     def test_frozen_challenges_and_payload_use_provider_defaults(self):
         restored = json.loads(json.dumps(self.plan))

@@ -5,6 +5,7 @@ COPY engine/requirements-build.txt /tmp/requirements-build.txt
 RUN pip install --no-cache-dir -r /tmp/requirements-build.txt
 WORKDIR /src
 COPY vendor/meow /src/vendor/meow
+COPY vendor/meow-source.json /src/vendor/meow-source.json
 COPY vendor/modeltrace /src/vendor/modeltrace
 COPY engine/worker.py engine/modeltrace_adapter.py /src/engine/
 RUN pyinstaller --clean --noconfirm --onefile --name meow-engine \
@@ -12,6 +13,8 @@ RUN pyinstaller --clean --noconfirm --onefile --name meow-engine \
     --paths /src/vendor/modeltrace \
     --add-data /src/vendor/modeltrace/data:vendor/modeltrace/data \
     --add-data /src/vendor/modeltrace/SOURCE.json:vendor/modeltrace \
+    --add-data /src/vendor/meow-source.json:vendor \
+    --add-data /src/vendor/meow/benchmarks/official:vendor/meow/benchmarks/official \
     --add-data /src/vendor/meow/gpt56_vnext/baselines:vendor/meow/gpt56_vnext/baselines \
     engine/worker.py
 COPY engine/collect_licenses.py /src/engine/collect_licenses.py

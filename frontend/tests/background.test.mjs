@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
+import { requestModels } from '../src/requestModels.ts'
 
 function view() {
   let dispose, scheduled, cleared = false
@@ -17,7 +18,7 @@ function view() {
   }
   const modules = {
     vue: { ref: value => ({value}), computed: read => ({get value() {return read()}}), watch: () => {}, onMounted: () => {}, onScopeDispose: fn => {dispose = fn} },
-    './api': {api}, '@codex-proxy/ui': {}, '@lucide/vue': {}, './accountDisplay': {}, './presentation': {}, './SourceUpdates.vue': {},
+    './requestModels': {requestModels}, './api': {api}, '@codex-proxy/ui': {}, '@lucide/vue': {}, './accountDisplay': {}, './presentation': {}, './SourceUpdates.vue': {},
   }
   let source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8').split('<script setup lang="ts">')[1].split('</script>')[0]
   source = source.replace('import.meta.env.DEV', 'false') + '\nexport {poll, start, control, openRun, run, loading, pumping}'

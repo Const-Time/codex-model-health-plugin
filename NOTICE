@@ -1,7 +1,7 @@
 账号模型体检 / Codex Proxy Model Health 0.2.2
 
 This plugin integrates unchanged Meow LLM Detector source from commit
-0f31d4a96c9e953277ab8e337d3dbd3ec57b316e (engine 4.5.4; baseline 4.5.3-predictive.2).
+dc608d5c097abf96575d5b34f49952ddbd27c281 (engine 4.5.4; baseline 4.5.4-predictive.20261003.1; legacy 4.5.3-predictive.2 retained).
 Source: https://github.com/chen-006/meow-llm-detector
 Required Notice: Copyright 2026 chen-006 and contributors.
 Original project: https://github.com/chen-006/gpt56_api_detector
@@ -518,7 +518,7 @@ SOFTWARE.
 
 
 ModelTrace fingerprint.py and data/unified_bank.json are unchanged from
-https://github.com/xqy2006/ModelTrace at d4131b30243dfa05e70180b5eedde742103f1d73.
+https://github.com/xqy2006/ModelTrace at 6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2.
 Source hashes: vendor/modeltrace/SOURCE.json. ModelTrace is MIT licensed.
 The integrated distribution continues to include Meow under PolyForm Noncommercial 1.0.0.
 
@@ -545,3 +545,5 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+Legacy ModelTrace bank from d4131b30243dfa05e70180b5eedde742103f1d73 is retained solely for frozen historical runs.

@@ -14,8 +14,8 @@
 
 | 项目 | 集成内容与固定版本 | 许可证 |
 | --- | --- | --- |
-| [Meow LLM Detector — chen-006](https://github.com/chen-006/meow-llm-detector) | 题目、响应解析、答案归一化与行为概率评分；引擎 4.5.4 / 基线 4.5.3-predictive.2；[提交 0f31d4a](https://github.com/chen-006/meow-llm-detector/tree/0f31d4a96c9e953277ab8e337d3dbd3ec57b316e) | [PolyForm Noncommercial 1.0.0](vendor/meow/LICENSE) |
-| [ModelTrace — xqy2006](https://github.com/xqy2006/ModelTrace) | 原始指纹算法与统一候选库；[提交 d4131b3](https://github.com/xqy2006/ModelTrace/tree/d4131b30243dfa05e70180b5eedde742103f1d73) | [MIT](vendor/modeltrace/LICENSE) |
+| [Meow LLM Detector — chen-006](https://github.com/chen-006/meow-llm-detector) | 题目、响应解析、答案归一化与行为概率评分；引擎 4.5.4 / 基线 4.5.4-predictive.20261003.1；[提交 dc608d5](https://github.com/chen-006/meow-llm-detector/tree/dc608d5c097abf96575d5b34f49952ddbd27c281) | [PolyForm Noncommercial 1.0.0](vendor/meow/LICENSE) |
+| [ModelTrace — xqy2006](https://github.com/xqy2006/ModelTrace) | 原始指纹算法与统一候选库；[提交 6cd4a8f](https://github.com/xqy2006/ModelTrace/tree/6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2) | [MIT](vendor/modeltrace/LICENSE) |
 
 宿主集成使用 [Codex Proxy 公开 SDK](https://github.com/zyycn/codex-proxy-rs/tree/dd529d07ec8e13b3d2b504f45e51b494d3215e2a/backend/crates/gateway-plugin/sdk)、[@codex-proxy/ui](https://github.com/zyycn/codex-proxy-ui) v0.3.2，并参考 [官方插件示例与规范](https://github.com/zyycn/codex-proxy-plugins)。
 
@@ -54,12 +54,12 @@ sha256sum -c local.model-health-0.7.0-x86_64-unknown-linux-gnu.tar.gz.sha256
 
 1. 按上述方式安装并启用插件。
 2. 打开「账号模型体检」，选择已启用的 OpenAI 账号，无需选择 Key。账号优先显示去除首尾空白后的邮箱；没有邮箱时显示账号名称。新建检测保存该显示名称，旧历史仍保留检测当时的名称；请求绑定始终使用账号 ID。
-3. 填写账号支持的请求模型并选择检测方法。Meow 选择对照模型和 36 / 72 / 108 题档位；ModelTrace 使用统一候选库，固定 3 轮数字选择。切换方法保留账号和请求模型。
+3. 填写账号支持的请求模型并选择检测方法。Meow 选择对照模型和 32 / 64 / 128 题档位；ModelTrace 使用统一候选库，固定 3 轮数字选择。切换方法保留账号和请求模型。
 4. 点击「开始检测」。每次只执行一个请求。新检测由管理员诊断通道发送，消耗账号真实上游额度，不扣用户 Key 额度；旧的有 Key 历史任务继续按原 Key 权限与计费执行。
 5. 失败会暂停；点「继续检测」才会继续。每档最多追加 50% 重试预算。离开菜单、隐藏页面或关闭浏览器后由宿主后台串行发送后续题目。宿主重启、插件停用或升级后不自动续发；重新打开并手动继续，未确认结果按一次未知尝试计入预算。
 6. 从历史打开报告或续测。仅在 16 个槽位满后替换最早的已结束记录，不覆盖未结束任务。
 
-Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告展示前 5 个候选模型及家族概率，完整 17 个候选的结果保存在任务报告中；满 3 个有效样本才给出「更接近」结论。概率是在冻结候选库内、均匀先验下的相对分布，库外模型也会归到已有候选，不代表真实身份概率。
+Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告展示前 5 个候选模型及家族概率，完整 18 个候选的结果保存在任务报告中；满 3 个有效样本才给出「更接近」结论。概率是在冻结候选库内、均匀先验下的相对分布，库外模型也会归到已有候选，不代表真实身份概率。
 
 两种方法都不是智商分数或模型身份认证，分数不混用。仍只选择宿主 OpenAI 账号；ModelTrace 候选库包含 GPT / Claude 家族，不等于新增 Claude 原生账号接入。只有相同方法、基线、模型与采样条件的复测才适合比较。
 
@@ -78,7 +78,7 @@ Meow 报告给出行为匹配、行为偏移或证据不足。ModelTrace 报告�
 - 使用 `host.auth.list/get_runtime` 的非秘密账号资料及 `host.account.probe`，新任务不读取 Key 列表或原始凭据；旧任务仍使用原 Key 模型调用。
 - 每个 `host.model.execute_stream` 都显式指定 `account_id`、`client_key_id`、`provider=openai` 和 `protocol=openai`。主服务负责代理、鉴权、配额与最终计量；插件不搭建另一套 HTTP 出口。
 - 完整保留 Meow 的题目、参数、SSE 解析、答案归一化和概率评分。原源码放在 `vendor/meow`，文件哈希没有改变。Meow 版本 4.5.4；基线内容哈希冻结在每次任务中。
-- ModelTrace 的原始 `fingerprint.py` 和统一候选库固定在上游提交 `d4131b30243dfa05e70180b5eedde742103f1d73`，来源及逐文件哈希见 `vendor/modeltrace/SOURCE.json`。复用原始随机题目生成、数字解析、Hellinger / 有序数字块融合、温度校准和家族聚合，不引入原项目的网络服务或 API Key 表单。
+- ModelTrace 的原始 `fingerprint.py` 和统一候选库固定在上游提交 `6cd4a8ff0f3f4e49d6d6969dd2fbadfa1569fde2`，来源及逐文件哈希见 `vendor/modeltrace/SOURCE.json`。复用原始随机题目生成、数字解析、Hellinger / 有序数字块融合、温度校准和家族聚合，不引入原项目的网络服务或 API Key 表单。
 - ModelTrace 生成 3 份独立题目后持久化，断点续测与失败重试保留题目和检测方法。通过现有 Responses 流发送单条用户消息，采样使用供应商默认值，不套用 Meow 的 256-token 短答参数。沿用插件单题 90 秒上限、串行执行、人工续测和 50% 重试预算（3 个有效样本、最多 5 次尝试），而非原网页的自动重试流程。
 - `ready → running → ready/paused/completed`；显式停止转 `stopped`。发送前先写 pending，异常中断后按一次未知结果计入预算。首轮所有题优先于重试；成功样本不重复计数。
 - 全局推理并发为 1；网络等待时释放状态锁。用户暂停/结束保留当前题的结果；页面只轮询状态，不发送检测题目。每题发送前及续测时核对账号 ID、平台、启用状态和冻结的上游身份；Cookie 回写、令牌刷新导致的凭据版本变化不视作换号，认证类型或上游身份变化则中止续测。
@@ -143,7 +143,7 @@ v0.9.0 使用固定上游 `dd529d07` SDK、RPC v7、management v2 和 maintenanc
 
 ## 定时账号探测
 
-默认关闭，只对手动选中的最多 50 个账号执行检测。检测方法可选择 Meow（36/72/108 题并选择对照基线）、ModelTrace（三轮统一候选库）或仅短探测；完整检测产生与手动检测相同的指纹报告，可从计划账号的「查看检测报告」或检测历史打开。账号支持搜索多选，请求模型支持下拉选择和自定义。可以选择三种调度方式：
+默认关闭，只对手动选中的最多 50 个账号执行检测。检测方法可选择 Meow（新版 32/64/128 题并选择对照基线，旧任务沿用旧基线）、ModelTrace（三轮统一候选库）或仅短探测；完整检测产生与手动检测相同的指纹报告，可从计划账号的「查看检测报告」或检测历史打开。账号支持搜索多选，请求模型支持下拉选择和自定义。可以选择三种调度方式：
 
 - **按间隔**：60–10080 分钟（默认 360 分钟），新增或重新启用后等待一个间隔。
 - **每天指定时间**：选择 `HH:mm` 和执行时区，例如 `09:30`、`Asia/Shanghai` 表示每天北京时间上午 9:30。

@@ -253,7 +253,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
         catalogs = boot["catalog"].get("methods", [{"method": "meow", **boot["catalog"]}])
         meow = next(c for c in catalogs if c["method"] == "meow")
         assert meow["engine_version"] == "4.5.4"
-        assert sorted(t["count"] for t in meow["tiers"]) == [36, 72, 108]
+        assert sorted(t["count"] for t in meow["tiers"]) == [32, 64, 128]
         assert len(meow["models"]) == 4
         assert boot["accounts"][0]["id"] == "smoke-account" and boot["keys"] == []
         assert boot["accounts"][0]["email"] == "  smoke@example.com  "
@@ -269,10 +269,10 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             assert result["run"]["account_id"] == "smoke-account"
             assert result["run"]["account_name"] == "smoke@example.com"
             run_id = result["run"]["id"]
-            for completed in range(36):
+            for completed in range(32):
                 status, result = api("api/runs/step", {"id": run_id})
                 if status != 200:
-                    print(f"CONTINUOUS FAIL: completed={completed}/36; revision_changed=YES; real_model_calls=0", flush=True)
+                    print(f"CONTINUOUS FAIL: completed={completed}/32; revision_changed=YES; real_model_calls=0", flush=True)
                     print(result["error"]["message"], file=sys.stderr)
                     sys.exit(1)
                 assert result["run"]["attempts"][-1]["status"] == "ok", result
@@ -280,21 +280,21 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
                     for action in ("pause", "resume"):
                         status, response = api("api/runs/control", {"id": run_id, "action": action})
                         assert status == 200, response
-            assert result["run"]["status"] == "completed" and result["run"]["report"]["valid_samples"] == 36
+            assert result["run"]["status"] == "completed" and result["run"]["report"]["valid_samples"] == 32
             attempts = result["run"]["attempts"]
-            assert len({a["job_id"] for a in attempts}) == 36
-            assert [a["request_id"] for a in attempts] == ["" for _ in range(36)]
-            assert host["executions"] == 36 and runtime_account()["credential_revision"] == 37
+            assert len({a["job_id"] for a in attempts}) == 32
+            assert [a["request_id"] for a in attempts] == ["" for _ in range(32)]
+            assert host["executions"] == 32 and runtime_account()["credential_revision"] == 33
             status, restored = api("api/runs/get", {"id": run_id})
             assert status == 200
             assert_same(restored["run"], result["run"])
-            print("CONTINUOUS PASS: completed=36/36; revision=1->37; pause_resume=PASS; duplicate_requests=0; real_model_calls=0", flush=True)
+            print("CONTINUOUS PASS: completed=32/32; revision=1->33; pause_resume=PASS; duplicate_requests=0; real_model_calls=0", flush=True)
         if modeltrace:
             if not any(c["method"] == "modeltrace" for c in catalogs):
                 print("MODELTRACE ABSENT: methods=meow; real_model_calls=0", flush=True)
                 sys.exit(1)
             trace = next(c for c in catalogs if c["method"] == "modeltrace")
-            assert len(trace["models"]) == 17 and trace["family_count"] == 2
+            assert len(trace["models"]) == 18 and trace["family_count"] == 2
             status, result = api("api/runs/start", {"method": "modeltrace", "account_id": "smoke-account",
                                 "request_model": "gpt-6-astra", "claimed_model": "unified", "tier": "fixed"})
             assert status == 200, result
@@ -314,7 +314,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
                         status, response = api("api/runs/control", {"id": run_id, "action": action})
                         assert status == 200, response
             assert result["run"]["status"] == "completed" and result["run"]["report"]["verdict"] == "attributed"
-            assert len(result["run"]["report"]["analysis"]["results"]) == 17
+            assert len(result["run"]["report"]["analysis"]["results"]) == 18
             assert len({a["job_id"] for a in result["run"]["attempts"]}) == 3
             assert host["executions"] == before + 3
             status, restored = api("api/runs/get", {"id": run_id})
@@ -323,7 +323,7 @@ with tempfile.TemporaryDirectory(prefix="model-health-smoke-") as directory:
             status, history = api("api/runs")
             assert status == 200 and history["runs"][0]["method"] == "modeltrace"
             assert history["runs"][0]["report"] == result["run"]["report"]
-            print("MODELTRACE PASS: completed=3/3; candidates=17; pinned_account=PASS; keyless=PASS; frozen_plan=PASS; pause_resume=PASS; history=PASS; real_model_calls=0", flush=True)
+            print("MODELTRACE PASS: completed=3/3; candidates=18; pinned_account=PASS; keyless=PASS; frozen_plan=PASS; pause_resume=PASS; history=PASS; real_model_calls=0", flush=True)
         if updates:
             if "sources" not in boot:
                 print("UPDATES ABSENT: sources=0; model_methods=2; real_model_calls=0", flush=True)

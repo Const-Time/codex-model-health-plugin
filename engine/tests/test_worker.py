@@ -13,10 +13,26 @@ class WorkerTests(unittest.TestCase):
         self.plan = worker.prepare({"tier": "low", "claimed_model": worker.catalog()["models"][0]["id"], "request_model": "gpt-5.4"})
 
     def test_catalog_and_exact_counts(self):
-        self.assertEqual(sorted(t["count"] for t in worker.catalog()["tiers"]), [36, 72, 108])
-        self.assertEqual(len(self.plan["jobs"]), 36)
-        self.assertEqual(self.plan["retry_budget"], 18)
+        self.assertEqual(sorted(t["count"] for t in worker.catalog()["tiers"]), [32, 64, 128])
+        self.assertEqual(len(self.plan["jobs"]), 32)
+        self.assertEqual(self.plan["retry_budget"], 16)
         self.assertFalse(any(m.get("reference_only") for m in worker.catalog()["models"]))
+
+    def test_new_requests_and_frozen_legacy_plan(self):
+        self.assertIn('gpt-6.1-sol', [m['id'] for m in worker.catalog()['models']])
+        self.assertNotIn('gpt-6.1-terra', [m['id'] for m in worker.catalog()['models']])
+        for model in ['gpt-6.1-sol', 'gpt-6.1-terra']:
+            plan = worker.prepare({'tier':'low','claimed_model':'gpt-6.1-sol','request_model':model})
+            payload = worker.handle({'op':'payload','plan':plan,'job_id':plan['jobs'][0]['job_id']})
+            self.assertEqual(payload['model'], model)
+        old = worker.LEGACY_PACKAGE
+        plan = {**worker.catalog(old), 'tier':'low','claimed_model':'gpt-6-astra','request_model':'gpt-6-astra'}
+        jobs = worker.build_single_jobs(old, 'low', plan['request_model'])
+        self.assertEqual(len(jobs), 36)
+        self.assertEqual(worker.check_plan(plan), old)
+        self.assertEqual(worker.handle({'op':'payload','plan':plan,'job_id':jobs[0]['job_id']}), worker.build_payload('gpt',plan['request_model'],worker.cells_by_id(old)[jobs[0]['cell_id']]))
+        self.assertEqual(worker.score(plan, [])['planned_samples'], 36)
+        self.assertEqual(worker.prepare({'tier':'low','claimed_model':'gpt-5.6-sol','request_model':'gpt-5.6-sol'})['hash'], old['content_sha256'])
 
     def test_long_unknown_answer_is_bounded_without_changing_scoring(self):
         job = self.plan["jobs"][0]
