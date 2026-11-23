@@ -4,7 +4,6 @@
 
 html, body, #app { height: auto; min-width: 0; }
 body { margin: 0; background: transparent; }
-#app { min-height: inherit; }
 h2 { margin: 0; font-size: 1.125rem; font-weight: 700; }
 .subtitle { margin: .4rem 0 0; color: var(--cp-color-text-secondary); font-size: .875rem; }
 .muted { color: var(--cp-color-text-secondary); }
@@ -45,7 +44,7 @@ h2 { margin: 0; font-size: 1.125rem; font-weight: 700; }
 .health-toolbar { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .health-navigation { flex: 1 1 min(20rem, 100%); max-width: 30rem; }
 .health-toolbar > :last-child { margin-left: auto; }
-.desktop-records { height: clamp(17rem, 48dvh, 29rem); }
+.desktop-records { display: flex; flex-direction: column; max-height: 29rem; }
 .mobile-records { display: none; }
 .health-record { display: grid; min-width: 0; gap: .75rem; padding: .875rem; border: 1px solid var(--cp-color-border-secondary); border-radius: var(--cp-border-radius); background: var(--cp-color-fill-quaternary); overflow-wrap: anywhere; }
 .health-record > header { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
