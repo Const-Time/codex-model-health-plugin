@@ -21,7 +21,7 @@ function view() {
     './requestModels': {requestModels}, './api': {api}, '@codex-proxy/ui': {}, '@lucide/vue': {}, './accountDisplay': {}, './presentation': {}, './SourceUpdates.vue': {},
   }
   let source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8').split('<script setup lang="ts">')[1].split('</script>')[0]
-  source = source.replace('import.meta.env.DEV', 'false') + '\nexport {poll, start, control, openRun, run, loading, pumping}'
+  source = source.replace('import.meta.env.DEV', 'false') + '\nexport {poll, start, control, openRun, run, loading, pumping, account, model, claimed, bootstrap, reportOpen}'
   const context = { exports: {}, document, require: name => {assert(name in modules, name);return modules[name]}, setTimeout: fn => {scheduled = fn; return 1}, clearTimeout: () => {cleared = true} }
   runInNewContext(ts.transpileModule(source, {compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}}).outputText, context)
   return { ...context.exports, calls, document, activeRun, dispose: () => dispose(), scheduled: () => scheduled, cleared: () => cleared }
@@ -31,7 +31,15 @@ test('start enqueues once; polling and disposal never issue step/pause requests'
   const v = view()
   v.loading.value = false
   await v.start()
+  assert.equal(v.calls.length, 0)
+  v.bootstrap.value = { background_supported: true, catalog: { methods: [{ method: 'meow', tiers: [{ id: 'low', count: 32 }] }] } }
+  v.account.value = 'account-1'
+  v.model.value = 'gpt-6-astra'
+  v.claimed.value = 'gpt-6-astra'
+  await v.start()
   assert.equal(v.calls.filter(c => c.path === 'runs/start').length, 1)
+  assert.equal(v.calls.find(c => c.path === 'runs/start').data.tier, 'low')
+  assert.equal(v.reportOpen.value, true)
   assert.equal(v.pumping.value, true)
   await v.poll()
   assert(v.calls.some(c => c.path === 'runs/get'))

@@ -15,7 +15,6 @@ const legacyDetection = (): ScheduleDetection => ({ method: 'short', tier: 'low'
 const detectionMethods = [{ value: 'meow', label: 'Meow' }, { value: 'modeltrace', label: 'ModelTrace' }, { value: 'short', label: '仅短探测' }]
 const meowCatalog = computed(() => props.methods.find(method => method.method === 'meow'))
 const baselines = computed(() => meowCatalog.value?.models.map(model => ({ value: model.id, label: model.label || model.id })) || [])
-const tiers = computed(() => meowCatalog.value?.tiers.map(tier => ({ value: tier.id, label: `${tier.count} 题` })) || [])
 const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 const defaultTiming = (): ScheduleTiming => ({ mode: 'interval', daily_time: '09:00', cron: '0 9 * * *', timezone: browserTimezone })
 const plan = ref<Plan>({ concurrency: 2, enabled: false, model: '', interval_minutes: 360, timing: defaultTiming(), detection: legacyDetection(), accounts: [] })
@@ -116,7 +115,6 @@ onMounted(load)
         </div>
         <template v-if="plan.detection.method === 'meow'">
           <div class="field"><label>对照基线</label><BaseSelect v-model="plan.detection.claimed_model" aria-label="定时检测对照基线" :options="baselines" :disabled="busy || !loaded" placeholder="选择要核对的模型" /></div>
-          <div class="field"><label>检测档位</label><BaseSelect v-model="plan.detection.tier" aria-label="定时检测档位" :options="tiers" :disabled="busy || !loaded" /></div>
         </template>
         <p v-if="plan.detection.method === 'modeltrace'" class="muted text-cp-sm col-span-full">统一候选库，三轮数字检测；完成后可在检测历史查看归属报告。</p>
         <div class="field col-span-full">
