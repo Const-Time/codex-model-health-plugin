@@ -25,7 +25,7 @@
 
 | 项目 | 当前支持 |
 | --- | --- |
-| 插件 ID / 版本 | `local.model-health` / `0.11.1` |
+| 插件 ID / 版本 | `local.model-health` / `0.11.2` |
 | 进程协议 | RPC v7；必须与本次升级后的宿主配套，需要本项目 3.15.0+；旧 RPC v5 制品需重新构建 |
 | 宿主清单范围 | `>=3.15.0, <4.0.0`；**还必须支持后台续调 v1 和 `host.account.probe` 管理员诊断扩展**（配套 Const-Time 宿主改动），版本号本身不代表支持；旧宿主拒绝开始 |
 | Release 平台 | Linux x86_64，glibc 2.36+（如 Debian 12）；不适用于 ARM64、Alpine/musl 或 Windows |
@@ -36,16 +36,16 @@
 
 ```text
 仓库：Const-Time/codex-model-health-plugin
-版本标签：v0.11.1（或留空查询最新稳定版）
+版本标签：v0.11.2（或留空查询最新稳定版）
 ```
 
-选择 `local.model-health-0.11.1-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
+选择 `local.model-health-0.11.2-x86_64-unknown-linux-gnu.tar.gz`，核对平台与摘要后安装并启用。也可从 [Releases](https://github.com/Const-Time/codex-model-health-plugin/releases) 下载该文件，通过“上传包”安装。请不要上传 GitHub 自动生成的 **Source code (zip/tar.gz)**，它们是源码而不是插件制品。
 
 Release 同时提供同名 `.tar.gz.sha256`；下载两个附件后可校验：
 
 ```sh
-sha256sum -c local.model-health-0.11.1-x86_64-unknown-linux-gnu.tar.gz.sha256
-# macOS：shasum -a 256 -c local.model-health-0.11.1-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c local.model-health-0.11.2-x86_64-unknown-linux-gnu.tar.gz.sha256
+# macOS：shasum -a 256 -c local.model-health-0.11.2-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 保留 `local.model-health` 是为了让原先本地安装的版本继续沿用同一插件身份与历史，不是更换发布账号。本 fork 维护者为 [Const-Time](https://github.com/Const-Time)。已有本地安装可在插件详情设置 GitHub 更新来源，或上传新版后确认切换；不要为了更新而删除原配置或私有数据。
